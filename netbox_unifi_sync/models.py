@@ -73,6 +73,11 @@ class GlobalSyncSettings(_ChangeLoggingMixin, models.Model):
         help_text="Create and update UniFi network devices in NetBox DCIM.",
     )
     sync_interfaces = models.BooleanField(default=True)
+    sync_port_link_state = models.BooleanField(
+        default=True,
+        help_text="Reflect live port link state: mark a switch/AP port as connected "
+                  "in NetBox (and note the negotiated speed) when something is plugged in.",
+    )
     sync_radio_interfaces = models.BooleanField(
         default=True,
         help_text="Sync UniFi AP radios as NetBox wireless interfaces.",

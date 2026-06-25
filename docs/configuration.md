@@ -77,6 +77,7 @@ Note: local Integration API keys are required for Integration API mode.
 - `enabled`
 - `sync_devices`
 - `sync_interfaces`
+- `sync_port_link_state` — mark a switch/AP port as connected (and note its negotiated speed) when something is plugged in
 - `sync_radio_interfaces`
 - `sync_gateway_interfaces`
 - `sync_primary_ips`
@@ -192,6 +193,7 @@ The plugin maps UI state into these internal engine keys (for compatibility/debu
 | `UNIFI_TAG_STRATEGY` | `tag_strategy` |
 | `SYNC_DEVICES` | `sync_devices` |
 | `SYNC_INTERFACES` | `sync_interfaces` |
+| `SYNC_PORT_LINK_STATE` | `sync_port_link_state` |
 | `SYNC_RADIO_INTERFACES` | `sync_radio_interfaces` |
 | `SYNC_GATEWAY_INTERFACES` | `sync_gateway_interfaces` |
 | `SYNC_PRIMARY_IPS` | `sync_primary_ips` |
@@ -227,7 +229,7 @@ These are valid in `PLUGINS_CONFIG["netbox_unifi_sync"]` when you need preseed d
 - `unifi_site_mappings`
 - `tag_strategy`, `default_tags`
 - `asset_tag_enabled`, `asset_tag_patterns`, `asset_tag_uppercase`
-- `sync_devices`, `sync_interfaces`, `sync_radio_interfaces`, `sync_gateway_interfaces`, `sync_primary_ips`
+- `sync_devices`, `sync_interfaces`, `sync_port_link_state`, `sync_radio_interfaces`, `sync_gateway_interfaces`, `sync_primary_ips`
 - `sync_device_status`, `sync_device_custom_fields`, `sync_vlans`, `sync_wlans`, `sync_cables`
 - `sync_stale_cleanup`, `sync_client_ips`
 - `dhcp_auto_discover`, `dhcp_ranges`, `sync_dhcp_ranges`, `default_gateway`, `default_dns`

@@ -148,6 +148,7 @@ def _build_override(
 
         "sync_devices": settings.sync_devices,
         "sync_interfaces": settings.sync_interfaces,
+        "sync_port_link_state": settings.sync_port_link_state,
         "sync_radio_interfaces": settings.sync_radio_interfaces,
         "sync_gateway_interfaces": settings.sync_gateway_interfaces,
         "sync_primary_ips": settings.sync_primary_ips,

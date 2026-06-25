@@ -159,6 +159,15 @@
 
       <div class="col">
         <div class="form-check">
+          {{ form.sync_port_link_state }}
+          <label class="form-check-label" for="{{ form.sync_port_link_state.id_for_label }}">Reflect port link state</label>
+          <div class="text-muted small">Mark a port as connected (and note its negotiated speed) when something is plugged in.</div>
+          {% for e in form.sync_port_link_state.errors %}<div class="text-danger small mt-1">{{ e }}</div>{% endfor %}
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="form-check">
           {{ form.sync_radio_interfaces }}
           <label class="form-check-label" for="{{ form.sync_radio_interfaces.id_for_label }}">Sync AP radio interfaces</label>
           <div class="text-muted small">Create/update Wi-Fi radios with channel, width, TX, utilization and noise metadata.</div>

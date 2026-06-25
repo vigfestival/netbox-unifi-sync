@@ -859,6 +859,19 @@ def sync_uplink_cable(nb, nb_device, device, all_nb_devices_by_mac):
         logger.debug(f"Cable sync for {device_name}: upstream {upstream_nb.name}:{upstream_iface.name} already has a cable — skipping")
         return
 
+    # A cable owns the connection state, and NetBox forbids mark_connected on a
+    # cabled interface. If the live-link-state sync flagged either end as
+    # connected, clear it first so the two never coexist (which would otherwise
+    # block manual edits of the interface).
+    for end_iface in (our_iface, upstream_iface):
+        try:
+            if getattr(end_iface, "mark_connected", False):
+                end_iface.mark_connected = False
+                end_iface.save()
+        except Exception as exc:
+            logger.debug("Could not clear mark_connected before cabling %s: %s",
+                         getattr(end_iface, "name", "?"), exc)
+
     with _cable_lock:
         try:
             cable = nb.dcim.cables.create({
@@ -1606,7 +1619,26 @@ def _format_power_watts(value):
     return f"{numeric:g}W"
 
 
-def _build_port_description(port, *, is_uplink=False, poe=None, speed_mbps=None):
+def _coerce_link_up(port, *, integration):
+    """Return True/False if the port's link (carrier) state is known, else None.
+
+    A port whose link is UP has something physically connected to it. The
+    Integration API reports this via ``state`` ("UP"/"DOWN"); the legacy
+    ``port_table`` reports it via the boolean ``up`` field. When no link signal
+    is present we return None so callers leave NetBox's connection state alone
+    rather than guessing.
+    """
+    if integration:
+        state = port.get("state")
+        if isinstance(state, str) and state.strip():
+            return state.strip().upper() == "UP"
+    if "up" in port:
+        return bool(port.get("up"))
+    return None
+
+
+def _build_port_description(port, *, is_uplink=False, poe=None, speed_mbps=None,
+                            link_up=None, link_speed_mbps=None):
     parts = []
     if is_uplink:
         parts.append("Uplink")
@@ -1665,6 +1697,14 @@ def _build_port_description(port, *, is_uplink=False, poe=None, speed_mbps=None)
     if speed_mbps:
         parts.append(f"Max speed: {speed_mbps}Mbps")
 
+    if link_up is True:
+        if link_speed_mbps:
+            parts.append(f"Link: up @ {link_speed_mbps}Mbps")
+        else:
+            parts.append("Link: up")
+    elif link_up is False:
+        parts.append("Link: down")
+
     return " | ".join(str(part) for part in parts if part)
 
 
@@ -1715,6 +1755,10 @@ def _build_radio_description(radio):
 def normalize_port_data(device, api_style="integration"):
     """Extract and normalize port data from device dict into a common format."""
     ports = []
+    # When disabled, the live link/connection state is not surfaced: link_up is
+    # left None (callers leave NetBox's mark_connected untouched) and the
+    # "Link: up/down" suffix is omitted from interface descriptions.
+    link_state_enabled = _sync_option("SYNC_PORT_LINK_STATE", default=True)
     if api_style == "integration":
         interfaces = device.get("interfaces")
         if isinstance(interfaces, dict):
@@ -1741,18 +1785,24 @@ def normalize_port_data(device, api_style="integration"):
         if api_style == "integration":
             name = port.get("name") or f"Port {port.get('portIdx') or port.get('idx', '?')}"
             speed_mbps = port.get("maxSpeed") or port.get("maxSpeedMbps") or port.get("speed") or port.get("speedMbps") or 0
-            enabled = (
-                port.get("enabled", True) if "enabled" in port
-                else port.get("state", "").upper() == "UP" if "state" in port
-                else port.get("up", True)
-            )
+            # Link state: UP means something is connected (cable/client live).
+            # The Integration API exposes only link state, not an admin-down flag,
+            # so administratively a real port is treated as enabled and the live
+            # link state is surfaced separately via mark_connected.
+            link_up = _coerce_link_up(port, integration=True)
+            enabled = port.get("enabled", True) if "enabled" in port else True
+            # Negotiated link speed (present only while the link is up).
+            link_speed_mbps = port.get("speedMbps") or port.get("speed") or None
             poe = _first_port_value(port, "poeMode", "poe_mode", "poe")
             mac = port.get("macAddress") or port.get("mac")
             is_uplink = port.get("isUplink", False)
         else:
             name = port.get("name") or f"Port {port.get('port_idx', '?')}"
             speed_mbps = port.get("speed") or 0
-            enabled = port.get("up", True)
+            link_up = _coerce_link_up(port, integration=False)
+            # Legacy port_table carries both admin (`enable`) and link (`up`) state.
+            enabled = port.get("enable", port.get("up", True)) if ("enable" in port or "up" in port) else True
+            link_speed_mbps = port.get("speed") or None
             poe = _first_port_value(port, "poe_mode", "poeMode", "poe")
             mac = port.get("mac")
             is_uplink = port.get("is_uplink", False)
@@ -1764,25 +1814,40 @@ def normalize_port_data(device, api_style="integration"):
         nb_type = map_unifi_port_to_netbox_type(port, api_style)
         speed_kbps = int(speed_mbps) * 1000 if speed_mbps else None
 
+        # PoE may be a plain mode string (legacy: "auto"/"off") or a dict
+        # (Integration API: {"standard": "802.3af", "enabled": True, "state": "UP"}).
+        # Normalise to a human-readable label and a NetBox poe_mode.
         nb_poe_mode = None
-        if poe:
-            poe_str = str(poe).lower()
-            if poe_str in ("auto", "pasv24", "passthrough", "on"):
+        poe_label = None
+        if isinstance(poe, dict):
+            if poe.get("enabled"):
+                poe_label = poe.get("standard") or "enabled"
                 nb_poe_mode = "pse"
+        elif poe:
+            poe_label = poe
+            if str(poe).lower() in ("auto", "pasv24", "passthrough", "on"):
+                nb_poe_mode = "pse"
+
+        if not link_state_enabled:
+            link_up = None
+            link_speed_mbps = None
 
         ports.append({
             "name": name,
             "type": nb_type,
             "speed_kbps": speed_kbps,
             "enabled": bool(enabled),
+            "link_up": link_up,
             "poe_mode": nb_poe_mode,
             "mac_address": mac,
             "is_uplink": bool(is_uplink),
             "description": _build_port_description(
                 port,
                 is_uplink=bool(is_uplink),
-                poe=poe,
+                poe=poe_label,
                 speed_mbps=speed_mbps,
+                link_up=link_up,
+                link_speed_mbps=link_speed_mbps,
             ),
         })
     return ports
@@ -1949,6 +2014,24 @@ def sync_device_interfaces(nb, nb_device, device, api_style="integration", unifi
         for iface in nb.dcim.interfaces.filter(device_id=nb_device.id)
     }
 
+    # Identify the uplink port name (same logic as sync_uplink_cable) so we can
+    # avoid putting mark_connected on the interface that will receive a Cable —
+    # the Integration API does not flag uplink at the per-port level.
+    uplink_info = (
+        original_device.get("_detail_uplink")
+        or original_device.get("uplink")
+        or device.get("uplink")
+        or {}
+    )
+    uplink_port_name = None
+    if isinstance(uplink_info, dict):
+        uplink_port_name = (
+            uplink_info.get("name")
+            or uplink_info.get("uplink_port")
+            or uplink_info.get("port_name")
+            or uplink_info.get("portName")
+        )
+
     # --- Physical Ports ---
     ports = normalize_port_data(device, api_style)
     for port in ports:
@@ -1967,6 +2050,17 @@ def sync_device_interfaces(nb, nb_device, device, api_style="integration", unifi
             iface_data["poe_mode"] = port["poe_mode"]
         if port.get("description"):
             iface_data["description"] = port["description"]
+        # Reflect live link state as NetBox's "connected" marker. Skip the
+        # uplink port (and any interface that already has a Cable): those get a
+        # real Cable from sync_uplink_cable, and NetBox forbids mark_connected
+        # on a cabled interface.
+        link_up = port.get("link_up")
+        is_uplink_port = bool(port.get("is_uplink")) or (
+            uplink_port_name is not None and iface_name == uplink_port_name
+        )
+        existing_has_cable = bool(existing and getattr(existing, "cable", None))
+        if link_up is not None and not is_uplink_port and not existing_has_cable:
+            iface_data["mark_connected"] = bool(link_up)
         port_mac = port.get("mac_address")  # handled separately via MACAddress model
 
         resolved_iface = None

@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Live port link state → NetBox "connected" marker.** When something is plugged into a switch/AP port (the UniFi port link is up), the matching NetBox interface is now marked connected (`mark_connected`) and its description notes the negotiated link speed (e.g. `Link: up @ 1000Mbps`); empty ports show `Link: down`. The UniFi Integration API exposes only the link state and speed per port — not which device is attached — so only the connection status is reflected, not a neighbour/MAC. Administrative `enabled` state is now kept separate from link state (a port with nothing plugged in is no longer shown as disabled). Uplink ports (which receive a real NetBox cable) are left for the cable sync to connect. Toggle via **Settings → Reflect port link state** (`sync_port_link_state`, env `SYNC_PORT_LINK_STATE`; default on).
 - **Dedicated role for non-SNMP switches.** Switches that don't support SNMP (e.g. the USW Flex Mini) are now assigned a `SWITCH_MINI` role key — map it to a NetBox role (default name "Switch-Mini") in **Settings → role mappings**. UniFi's device payload exposes no SNMP flag, so these are matched by model: the default marker is `flex mini`, extendable via the `UNIFI_NON_SNMP_SWITCH_MODELS` environment variable (comma-separated, case-insensitive substring match). If `SWITCH_MINI` isn't mapped, such switches fall back to the `LAN`/Switch role as before.
 
 ### Changed
