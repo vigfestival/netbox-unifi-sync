@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import contextmanager
 from typing import Any
+
+logger = logging.getLogger("netbox.plugins.netbox_unifi_sync.configuration")
 
 try:  # pragma: no cover - import-time compatibility shim
     from django.conf import settings as django_settings
@@ -163,15 +166,34 @@ def resolve_secret_value(value: Any) -> Any:
     text = value.strip()
     if text.startswith("env:"):
         env_name = text[4:].strip()
-        return os.getenv(env_name, "") if env_name else ""
+        if not env_name:
+            return ""
+        resolved = os.getenv(env_name)
+        if resolved is None:
+            # Log the variable NAME only (never a value) so a misconfigured
+            # reference surfaces instead of silently becoming an empty secret.
+            logger.warning("Secret env var %r is not set; using an empty value.", env_name)
+            return ""
+        return resolved
     if text.startswith("file:"):
         file_path = text[5:].strip()
         if not file_path:
             return ""
+        # Optional confinement: if UNIFI_SECRETS_DIR is set, refuse to read
+        # secret files outside it (defends against path traversal in refs).
+        secrets_dir = (os.getenv("UNIFI_SECRETS_DIR") or "").strip()
+        if secrets_dir:
+            base = os.path.realpath(secrets_dir)
+            target = os.path.realpath(file_path)
+            if target != base and not target.startswith(base + os.sep):
+                logger.warning("Refusing secret file outside UNIFI_SECRETS_DIR: %r", file_path)
+                return ""
         try:
             with open(file_path, "r", encoding="utf-8") as handle:
                 return handle.read().strip()
-        except OSError:
+        except OSError as exc:
+            # Log the path + exception class (not contents) for diagnosability.
+            logger.warning("Could not read secret file %r: %s", file_path, exc.__class__.__name__)
             return ""
     return value
 

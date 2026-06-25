@@ -12,6 +12,10 @@ All notable changes to this project are documented in this file.
 
 - The polled JSON status endpoints (`api/status/`, `runs/<id>/status/`) are now read-only: stale-run reaping moved to the scheduler tick (it still also runs on page loads), so the few-second dashboard poll no longer writes.
 - `InsecureRequestWarning` is suppressed only when SSL verification is actually disabled (per UniFi client) instead of globally at import.
+- **UniFi client no longer retries non-idempotent writes after the server may have applied them.** POST/PATCH requests are retried only on connection errors (request never reached the server) or HTTP 429, never on 5xx/read-timeout — preventing duplicate creates on flaky links. Idempotent methods (GET/HEAD/PUT/DELETE) retry as before.
+- **The shared UniFi `requests.Session`'s stateful auth transitions are now serialized.** Login re-authentication and Integration-API reconfiguration take a per-client lock so concurrent device/site threads can't interleave their writes to the session's cookie/CSRF/auth-header state. Plain HTTP sends remain unsynchronized (urllib3's pool is thread-safe).
+- Secret resolution (`env:`/`file:` references) now logs a warning when an env var is unset or a file can't be read (logging only the name/path, never the value), with optional `file:` path confinement via `UNIFI_SECRETS_DIR`.
+- Log/audit redaction recognises more secret-bearing keys (credential, authorization, bearer, session key, cookie, …).
 
 ## [0.4.0] - 2026-06-25
 

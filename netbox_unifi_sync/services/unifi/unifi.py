@@ -35,6 +35,9 @@ class Unifi:
     RETRY_BACKOFF_BASE = 1.0
     RETRY_BACKOFF_MAX = 30.0
     RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+    # Idempotent HTTP methods are safe to retry freely. POST/PATCH are not — a
+    # retry after the server may have applied the write would duplicate it.
+    IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
     _session_data = {}
 
     AUTH_MODES = (
@@ -71,6 +74,11 @@ class Unifi:
         self.allow_login_fallback = bool(allow_login_fallback)
 
         self.session = requests.Session()
+        # Serializes the stateful auth transitions (login re-auth, integration
+        # reconfigure) so concurrent device/site threads can't interleave their
+        # writes to the shared session/auth state. The plain per-request HTTP
+        # sends are left unsynchronized (urllib3's pool is thread-safe).
+        self._auth_lock = threading.RLock()
         self.csrf_token = None
         self.auth_mode = None
         self.api_prefix = ""
@@ -243,6 +251,23 @@ class Unifi:
         delay = min(self.retry_backoff_max, base_delay)
         jitter = delay * _JITTER_RANDOM.uniform(0.0, 0.25)
         return min(self.retry_backoff_max, delay + jitter)
+
+    def _retry_allowed_for_exception(self, method_upper, err) -> bool:
+        """Whether a transport error is safe to retry for this method."""
+        if method_upper in self.IDEMPOTENT_METHODS:
+            return True
+        # Non-idempotent (POST/PATCH): only retry when the request never reached
+        # the server (connection error / connect timeout). A read timeout may
+        # mean the write was applied, so retrying could duplicate it.
+        return isinstance(err, requests.exceptions.ConnectionError)
+
+    def _retry_allowed_for_status(self, method_upper, status_code) -> bool:
+        """Whether a transient HTTP status is safe to retry for this method."""
+        if method_upper in self.IDEMPOTENT_METHODS:
+            return status_code in self.RETRYABLE_STATUS_CODES
+        # Non-idempotent: only retry on 429 (rate limited), which is never
+        # applied. Never retry 5xx/408 — the write may already have taken effect.
+        return status_code == 429
 
     @staticmethod
     def _extract_request_path(response):
@@ -421,7 +446,15 @@ class Unifi:
         return unique
 
     def configure_integration_api(self):
-        """Detect working Integration API base URL + auth header format."""
+        """Detect working Integration API base URL + auth header format.
+
+        Serialized so concurrent threads can't interleave their writes to
+        integration_api_base / integration_auth_headers.
+        """
+        with self._auth_lock:
+            return self._configure_integration_api_impl()
+
+    def _configure_integration_api_impl(self):
         if not self.api_key:
             return False
 
@@ -577,7 +610,16 @@ class Unifi:
         logger.info(f"Loaded session data for {self.base_url} from file.")
 
     def authenticate(self, retry_count=0, max_retries=3):
-        """Log in and prepare an authenticated legacy session."""
+        """Log in and prepare an authenticated legacy session.
+
+        Serialized so two threads hitting a 401 at once don't re-authenticate
+        concurrently and clobber the shared cookie/CSRF state. RLock is
+        re-entrant, so the internal retry recursion is fine.
+        """
+        with self._auth_lock:
+            return self._authenticate_impl(retry_count=retry_count, max_retries=max_retries)
+
+    def _authenticate_impl(self, retry_count=0, max_retries=3):
         logger.debug(f"Authentication attempt {retry_count + 1}/{max_retries + 1}")
         if retry_count >= max_retries:
             logger.error("Max authentication retries reached. Aborting authentication.")
@@ -693,7 +735,7 @@ class Unifi:
             try:
                 response = self.session.request(method_upper, url, **request_kwargs)
             except requests.exceptions.RequestException as err:
-                if attempt < retries:
+                if attempt < retries and self._retry_allowed_for_exception(method_upper, err):
                     delay = self._compute_retry_delay_seconds(attempt)
                     logger.warning(
                         f"Legacy request exception ({method_upper} {url}): {err}. "
@@ -726,7 +768,7 @@ class Unifi:
                 continue
 
             if (
-                response.status_code in self.RETRYABLE_STATUS_CODES
+                self._retry_allowed_for_status(method_upper, response.status_code)
                 and attempt < retries
             ):
                 delay = self._compute_retry_delay_seconds(attempt, response=response)
@@ -809,7 +851,7 @@ class Unifi:
             try:
                 response = self.session.request(method_upper, url, **request_kwargs)
             except requests.exceptions.RequestException as err:
-                if attempt < retries:
+                if attempt < retries and self._retry_allowed_for_exception(method_upper, err):
                     delay = self._compute_retry_delay_seconds(attempt)
                     logger.warning(
                         f"Integration request exception ({method_upper} {url}): {err}. "
@@ -834,7 +876,7 @@ class Unifi:
                     continue
 
             if (
-                response.status_code in self.RETRYABLE_STATUS_CODES
+                self._retry_allowed_for_status(method_upper, response.status_code)
                 and attempt < retries
             ):
                 delay = self._compute_retry_delay_seconds(attempt, response=response)

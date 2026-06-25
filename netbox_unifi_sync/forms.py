@@ -163,6 +163,10 @@ class GlobalSyncSettingsForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["sync_interval_minutes"].help_text = (
+            "Minimum minutes between automatic syncs. The scheduler ticks hourly, "
+            "so values below 60 are effectively rounded up to ~60."
+        )
         instance = kwargs.get("instance")
         if instance:
             self.fields["default_tags_text"].initial = (
