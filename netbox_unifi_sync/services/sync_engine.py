@@ -2813,7 +2813,10 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
             # Update device type if model changed
             current_type_id = nb_device.device_type.id if nb_device.device_type else None
             if nb_device_type and current_type_id != nb_device_type.id:
-                nb_device.device_type = nb_device_type.id
+                # Assign via the FK's *_id attribute; assigning a raw int to the
+                # related field itself raises "Cannot assign ...: must be a
+                # DeviceType instance" (matches the role_id pattern below).
+                nb_device.device_type_id = nb_device_type.id
                 try:
                     nb_device.save()
                     logger.info(f"Updated device type for {device_name} to {device_model}")
