@@ -2756,6 +2756,46 @@ def _match_device_type_by_specs(nb, specs, manufacturer):
     return None
 
 
+def _old_primary_ip_is_disposable(old_ip_obj, device_name) -> bool:
+    """Decide whether a device's replaced primary IP can be safely deleted.
+
+    The sync creates management IPs with the device name as description and no
+    tags. Only such "sync-owned, no extra value" IPs may be deleted when a device
+    changes IP; anything carrying manual notes, tags, NAT relationships or
+    services is preserved (the caller unassigns it instead of deleting).
+    """
+    try:
+        from ipam.models import IPAddress
+        ip = IPAddress.objects.get(pk=old_ip_obj.id)
+    except Exception:
+        return False  # can't verify -> don't delete
+    try:
+        if ip.tags.exists():
+            return False
+        desc = (ip.description or "").strip()
+        if desc and desc != (device_name or "").strip():
+            return False
+        if getattr(ip, "nat_inside_id", None) or IPAddress.objects.filter(nat_inside_id=ip.id).exists():
+            return False
+        if hasattr(ip, "services") and ip.services.exists():
+            return False
+    except Exception:
+        return False  # any uncertainty -> preserve
+    return True
+
+
+def _unassign_ip(old_ip_obj) -> bool:
+    """Clear an IPAddress's interface assignment without deleting it."""
+    try:
+        from ipam.models import IPAddress
+        ip = IPAddress.objects.get(pk=old_ip_obj.id)
+        ip.assigned_object = None
+        ip.save()
+        return True
+    except Exception:
+        return False
+
+
 def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ips=None, unifi_site_obj=None):
     """Process a device and add it to NetBox."""
     try:
@@ -3125,12 +3165,22 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                     old_ip_str = str(old_ip_obj.address).split("/")[0]
             if old_ip_str and old_ip_str != device_ip:
                 logger.info(f"Device {device_name} IP changed: {old_ip_str} -> {device_ip}. Updating NetBox.")
-                # Remove old IP assignment
-                try:
-                    old_ip_obj.delete()
-                    logger.info(f"Deleted old IP {old_ip_str} for device {device_name}.")
-                except Exception as e:
-                    logger.warning(f"Could not delete old IP {old_ip_str} for device {device_name}: {e}")
+                # Only delete the old IP if it is plainly sync-owned; otherwise
+                # preserve it (manual notes, tags, NAT, services) by unassigning.
+                if _old_primary_ip_is_disposable(old_ip_obj, device_name):
+                    try:
+                        old_ip_obj.delete()
+                        logger.info(f"Deleted old IP {old_ip_str} for device {device_name}.")
+                    except Exception as e:
+                        logger.warning(f"Could not delete old IP {old_ip_str} for device {device_name}: {e}")
+                else:
+                    if _unassign_ip(old_ip_obj):
+                        logger.info(
+                            f"Kept old IP {old_ip_str} for device {device_name} "
+                            f"(has tags/notes/NAT/services); unassigned instead of deleting."
+                        )
+                    else:
+                        logger.warning(f"Could not unassign old IP {old_ip_str} for device {device_name}.")
                 nb_device.primary_ip4 = None
                 nb_device.save()
             elif old_ip_str and old_ip_str == device_ip:
