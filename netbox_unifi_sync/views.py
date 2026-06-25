@@ -454,8 +454,11 @@ def run_detail_view(request: HttpRequest, pk: int) -> HttpResponse:
         details_json = str(run.details)
     # Flatten the per-controller-group breakdown for a readable table.
     groups = []
-    if isinstance(run.details, dict):
-        for grp in run.details.get("details", {}).get("groups", []) or []:
+    cleanup_effective = None
+    inner = run.details.get("details", {}) if isinstance(run.details, dict) else {}
+    if isinstance(inner, dict):
+        cleanup_effective = inner.get("cleanup_effective")
+        for grp in inner.get("groups", []) or []:
             result = grp.get("result", {}) if isinstance(grp, dict) else {}
             groups.append({
                 "group": grp.get("group"),
@@ -468,7 +471,12 @@ def run_detail_view(request: HttpRequest, pk: int) -> HttpResponse:
     return render(
         request,
         "netbox_unifi_sync/run_detail.html",
-        {"run": run, "details_json": details_json, "groups": groups},
+        {
+            "run": run,
+            "details_json": details_json,
+            "groups": groups,
+            "cleanup_effective": cleanup_effective,
+        },
     )
 
 
