@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 from core.choices import ObjectChangeActionChoices
@@ -447,7 +448,28 @@ def run_list_view(request: HttpRequest) -> HttpResponse:
 @permission_required("netbox_unifi_sync.view_syncrun", raise_exception=True)
 def run_detail_view(request: HttpRequest, pk: int) -> HttpResponse:
     run = get_object_or_404(SyncRun, pk=pk)
-    return render(request, "netbox_unifi_sync/run_detail.html", {"run": run})
+    try:
+        details_json = json.dumps(run.details or {}, indent=2, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        details_json = str(run.details)
+    # Flatten the per-controller-group breakdown for a readable table.
+    groups = []
+    if isinstance(run.details, dict):
+        for grp in run.details.get("details", {}).get("groups", []) or []:
+            result = grp.get("result", {}) if isinstance(grp, dict) else {}
+            groups.append({
+                "group": grp.get("group"),
+                "controllers": ", ".join(grp.get("controllers", []) or []),
+                "controllers_total": result.get("controllers"),
+                "sites": result.get("sites"),
+                "devices": result.get("devices"),
+                "mode": result.get("mode"),
+            })
+    return render(
+        request,
+        "netbox_unifi_sync/run_detail.html",
+        {"run": run, "details_json": details_json, "groups": groups},
+    )
 
 
 @login_required

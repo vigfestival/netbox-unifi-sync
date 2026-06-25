@@ -46,9 +46,41 @@
 </div>
 {% endif %}
 
+{% if groups %}
 <div class="card mb-3">
-  <h2 class="card-header">Details</h2>
-  <div class="card-body"><pre class="mb-0">{{ run.details|pprint }}</pre></div>
+  <h2 class="card-header">Breakdown</h2>
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr><th>Group</th><th>Controller(s)</th><th>Mode</th><th>Sites</th><th>Devices</th></tr>
+      </thead>
+      <tbody>
+      {% for g in groups %}
+        <tr>
+          <td>{{ g.group }}</td>
+          <td>{{ g.controllers|default:'—' }}</td>
+          <td>{% if g.mode == 'dry-run' %}<span class="badge text-bg-purple">Dry run</span>{% else %}<span class="badge text-bg-blue">{{ g.mode|default:'sync' }}</span>{% endif %}</td>
+          <td>{{ g.sites }}</td>
+          <td>{{ g.devices }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card mb-3">
+  <h2 class="card-header d-flex justify-content-between align-items-center">
+    <span>Raw details</span>
+    <button class="btn btn-sm btn-outline-secondary" type="button"
+            data-bs-toggle="collapse" data-bs-target="#nus-raw-details" aria-expanded="false">
+      Show / hide
+    </button>
+  </h2>
+  <div class="collapse show" id="nus-raw-details">
+    <div class="card-body"><pre class="mb-0"><code>{{ details_json }}</code></pre></div>
+  </div>
 </div>
 
 {% if run.status == 'pending' or run.status == 'running' %}
