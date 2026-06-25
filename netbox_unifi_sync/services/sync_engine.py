@@ -3712,7 +3712,12 @@ def _build_netbox_context(config):
     nb = build_netbox_orm_client()
     logger.debug("NetBox ORM client ready")
 
-    nb_ubiquity = nb.dcim.manufacturers.get(slug="ubiquity")
+    # Prefer the canonical "Ubiquiti" manufacturer (slug "ubiquiti", used by the
+    # community device-type library) over the legacy plugin-created "Ubiquity
+    # Networks" (slug "ubiquity"). Falls back to the legacy one if the canonical
+    # is absent. Run `netbox_unifi_sync_consolidate_manufacturer` to merge any
+    # existing types from the legacy manufacturer into the canonical one.
+    nb_ubiquity = nb.dcim.manufacturers.get(slug="ubiquiti") or nb.dcim.manufacturers.get(slug="ubiquity")
     try:
         tenant_name = config['NETBOX']['TENANT']
     except (KeyError, TypeError):
@@ -3787,9 +3792,9 @@ def _build_netbox_context(config):
     logger.debug(f"Prepared {len(netbox_sites_dict)} NetBox sites for mapping")
 
     if not nb_ubiquity:
-        nb_ubiquity = nb.dcim.manufacturers.create({"name": "Ubiquity Networks", "slug": "ubiquity"})
+        nb_ubiquity = nb.dcim.manufacturers.create({"name": "Ubiquiti", "slug": "ubiquiti"})
         if nb_ubiquity:
-            logger.info(f"Ubiquity manufacturer with ID {nb_ubiquity.id} successfully added to Netbox.")
+            logger.info(f"Ubiquiti manufacturer with ID {nb_ubiquity.id} successfully added to Netbox.")
 
     return {
         "config": config,
