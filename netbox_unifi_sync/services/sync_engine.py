@@ -1203,6 +1203,20 @@ def sync_site_wlans(nb, site_obj, nb_site, tenant):
                     logger.warning(f"Failed to update wireless LAN '{ssid}': {e}")
 
 
+def _parse_client_mac_from_description(description) -> str | None:
+    """Recover the client MAC stored in a unifi-client IP description.
+
+    Description format is ``unifi-client:<MAC>|...``. Returns the upper-cased MAC,
+    or None if the description was edited/cleared and no longer carries it — in
+    which case cleanup must NOT delete the IP (it can't be identified).
+    """
+    desc = description or ""
+    if desc.startswith("unifi-client:"):
+        mac = desc.split(":", 1)[1].split("|", 1)[0].strip().upper()
+        return mac or None
+    return None
+
+
 def _client_description(client_data):
     parts = [f"unifi-client:{client_data['mac']}"]
     hostname = str(client_data.get("hostname") or "").strip()
@@ -1492,15 +1506,21 @@ def sync_client_ips(nb, site_obj, nb_site, tenant):
                 continue
 
             # Parse stored MAC from description
-            desc = nb_ip.description or ""
-            stored_mac = None
-            if desc.startswith("unifi-client:"):
-                stored_mac = desc.split(":", 1)[1].split("|", 1)[0].strip().upper()
+            stored_mac = _parse_client_mac_from_description(nb_ip.description)
 
             ip_plain = str(nb_ip.address).split("/")[0]
 
+            # Fail-safe: never delete an IP whose client MAC we cannot recover
+            # (e.g. the description was edited or cleared). Deleting here would
+            # destroy a user-annotated or externally-tagged unifi-client IP.
+            if not stored_mac:
+                logger.debug(
+                    f"Keeping client IP {nb_ip.address}: MAC not parseable from description."
+                )
+                continue
+
             # Keep if MAC still active AND IP matches
-            if stored_mac and stored_mac in active_clients:
+            if stored_mac in active_clients:
                 if active_clients[stored_mac]["ip"] == ip_plain:
                     continue  # still valid
 
