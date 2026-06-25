@@ -25,6 +25,7 @@ DEFAULT_ROLES = {
     "WIRELESS": "Wireless AP",
     "ROUTER": "Router",
     "LAN": "Switch",
+    "SWITCH_MINI": "Switch-Mini",
     "GATEWAY": "Security Appliance",
     "UNKNOWN": "Network Device",
 }

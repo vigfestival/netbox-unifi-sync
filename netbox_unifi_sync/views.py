@@ -483,8 +483,11 @@ def run_detail_view(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 @permission_required("netbox_unifi_sync.view_syncrun", raise_exception=True)
 def run_status_view(request: HttpRequest, pk: int) -> JsonResponse:
-    """Lightweight JSON status for a single run, used for live UI polling."""
-    mark_stale_sync_runs()
+    """Lightweight JSON status for a single run, used for live UI polling.
+
+    Read-only: stale-run reaping happens on page loads and on the scheduler
+    tick, not here, so the 3-second poll doesn't amplify writes.
+    """
     run = get_object_or_404(SyncRun, pk=pk)
     terminal = run.status in (
         SyncRunStatus.SUCCESS,
@@ -541,8 +544,8 @@ def audit_list_view(request: HttpRequest) -> HttpResponse:
 @login_required
 @permission_required("netbox_unifi_sync.view_syncrun", raise_exception=True)
 def api_status_view(request: HttpRequest) -> JsonResponse:
+    # Read-only: polled every few seconds by the dashboard, so it must not write.
     settings_obj = get_or_create_global_settings()
-    mark_stale_sync_runs()
     latest = SyncRun.objects.order_by("-created").first()
     payload = {
         "enabled": settings_obj.enabled,

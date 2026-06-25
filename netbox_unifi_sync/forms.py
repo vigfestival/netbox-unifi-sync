@@ -131,14 +131,17 @@ class GlobalSyncSettingsForm(forms.ModelForm):
         label="NetBox role mappings",
         help_text=(
             "One mapping per line in the format  KEY = Role name.  "
-            "Canonical keys: WIRELESS, LAN, GATEWAY, ROUTER, UNKNOWN.  "
+            "Canonical keys: WIRELESS, LAN, SWITCH_MINI, GATEWAY, ROUTER, UNKNOWN.  "
+            "SWITCH_MINI is used for switches without SNMP support (e.g. USW Flex Mini); "
+            "extend that set with UNIFI_NON_SNMP_SWITCH_MODELS.  "
             "Example: WIRELESS = Wireless AP"
         ),
         widget=forms.Textarea(attrs={
-            "rows": 8,
+            "rows": 9,
             "placeholder": (
                 "WIRELESS = Wireless AP\n"
                 "LAN = Switch\n"
+                "SWITCH_MINI = Switch-Mini\n"
                 "ROUTER = Router\n"
                 "GATEWAY = Security Appliance\n"
                 "UNKNOWN = Network Device"

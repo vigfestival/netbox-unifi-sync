@@ -13,6 +13,7 @@ from netbox.jobs import JobRunner, system_job
 from .models import SyncRun
 from .services.audit import record_event, sanitize_error
 from .services.job_maintenance import prune_scheduler_jobs_after_tick
+from .services.sync_runs import mark_stale_sync_runs
 from .services.orchestrator import (
     SyncConfigurationError,
     get_or_create_global_settings,
@@ -180,6 +181,13 @@ class UnifiSyncSchedulerJob(JobRunner):
         # Keep our own core_job history trimmed so the table cannot slowly
         # re-bloat (never touches the scheduled successor; never raises).
         prune_scheduler_jobs_after_tick()
+
+        # Reap sync runs left "pending"/"running" by a dead worker. Doing it here
+        # (and on page loads) keeps the polled status endpoints read-only.
+        try:
+            mark_stale_sync_runs()
+        except Exception:  # pragma: no cover - never break the tick
+            logger.exception("mark_stale_sync_runs failed during scheduler tick")
 
         settings = get_or_create_global_settings()
         if not scheduler_due(settings):

@@ -4,7 +4,6 @@ import os
 import secrets
 import threading
 import time
-import warnings
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -16,8 +15,8 @@ from .sites import Sites
 
 file_lock = threading.Lock()
 
-# Suppress only the InsecureRequestWarning
-warnings.simplefilter("ignore", InsecureRequestWarning)
+# Note: the InsecureRequestWarning is suppressed per-client only when SSL
+# verification is explicitly disabled (see Unifi.__init__), not globally.
 
 logger = logging.getLogger(__name__)
 _JITTER_RANDOM = secrets.SystemRandom()
@@ -84,6 +83,12 @@ class Unifi:
             if verify_ssl is not None
             else self._read_env_bool("UNIFI_VERIFY_SSL", True)
         )
+        # Only silence the "unverified HTTPS request" warning when the operator
+        # has deliberately disabled SSL verification — otherwise the warning is
+        # left intact so an accidental unverified request is still visible.
+        if not self.verify_ssl:
+            import urllib3
+            urllib3.disable_warnings(InsecureRequestWarning)
         self.persist_session = self._read_env_bool("UNIFI_PERSIST_SESSION", False)
         self.request_timeout = self._read_env_int(
             "UNIFI_REQUEST_TIMEOUT",

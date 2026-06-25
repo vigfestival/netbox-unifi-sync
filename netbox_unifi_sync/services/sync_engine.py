@@ -4,13 +4,11 @@ import json
 from slugify import slugify
 import os
 import re
-import warnings
 import logging
 import ipaddress
 import threading
 from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib3.exceptions import InsecureRequestWarning
 # Import the unifi module instead of defining the Unifi class
 from .sync import ipam as ipam_helpers
 from .sync import vrf as vrf_helpers
@@ -34,8 +32,6 @@ from .sync.vrf import get_or_create_vrf, get_vrf_for_site  # noqa: F401
 from .unifi.unifi import Unifi
 from .unifi.model_specs import UNIFI_MODEL_SPECS
 from .unifi.spec_refresh import refresh_specs_bundle, write_specs_bundle
-# Suppress only the InsecureRequestWarning
-warnings.simplefilter("ignore", InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
@@ -2305,10 +2301,30 @@ def get_device_features(device):
         return set(features.keys())
     return set()
 
+# UniFi's device payload exposes no SNMP-capability flag, so non-SNMP switches
+# (e.g. the USW Flex Mini) are identified by model. The list is a case-insensitive
+# substring match and can be extended via UNIFI_NON_SNMP_SWITCH_MODELS
+# (comma-separated). Such switches get the SWITCH_MINI role key instead of LAN.
+_DEFAULT_NON_SNMP_SWITCH_MARKERS = ("flex mini",)
+
+
+def _non_snmp_switch_markers() -> tuple[str, ...]:
+    raw = (os.getenv("UNIFI_NON_SNMP_SWITCH_MODELS") or "").strip()
+    if not raw:
+        return _DEFAULT_NON_SNMP_SWITCH_MARKERS
+    markers = tuple(m.strip().lower() for m in raw.split(",") if m.strip())
+    return markers or _DEFAULT_NON_SNMP_SWITCH_MARKERS
+
+
+def _is_non_snmp_switch(model: str) -> bool:
+    model_l = str(model or "").lower()
+    return any(marker in model_l for marker in _non_snmp_switch_markers())
+
+
 def infer_role_key_for_device(device):
     """
     Infer a role key from device capabilities/model.
-    Supported keys: WIRELESS, LAN, GATEWAY, ROUTER, UNKNOWN.
+    Supported keys: WIRELESS, LAN, SWITCH_MINI, GATEWAY, ROUTER, UNKNOWN.
     """
     if is_access_point_device(device):
         return "WIRELESS"
@@ -2327,6 +2343,9 @@ def infer_role_key_for_device(device):
         return "ROUTER"
 
     if {"switching", "switch", "ports"} & features:
+        # Switches without SNMP support (e.g. USW Flex Mini) get a dedicated role.
+        if _is_non_snmp_switch(device.get("model", "")):
+            return "SWITCH_MINI"
         return "LAN"
 
     return "UNKNOWN"
