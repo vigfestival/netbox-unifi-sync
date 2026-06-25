@@ -2317,6 +2317,7 @@ _device_type_specs_lock = threading.Lock()
 #  Community device-type library (netbox-community/devicetype-library)
 # ---------------------------------------------------------------------------
 _community_specs = None
+_community_specs_lock = threading.Lock()
 
 
 def _default_specs_cache_path() -> str:
@@ -2344,10 +2345,23 @@ def _writable_specs_cache_path(current_path: str) -> str | None:
 
 
 def _load_community_specs():
-    """Load community device specs from bundled JSON file (lazy, cached)."""
+    """Load community device specs (lazy, cached, thread-safe).
+
+    Guarded by a double-checked lock: this runs under the device ThreadPoolExecutor,
+    so without it the first batch of device threads would each load the file and
+    (when auto-refresh is on) fire a concurrent network fetch + cache write.
+    """
     global _community_specs
     if _community_specs is not None:
         return _community_specs
+    with _community_specs_lock:
+        if _community_specs is None:
+            _community_specs = _load_community_specs_impl()
+    return _community_specs
+
+
+def _load_community_specs_impl():
+    """Load community device specs from file (+ optional network refresh)."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     custom_specs_path = (os.getenv("UNIFI_SPECS_FILE") or "").strip()
     json_candidates = [
@@ -2360,16 +2374,15 @@ def _load_community_specs():
     json_path = next((path for path in json_candidates if path and os.path.exists(path)), None)
     if not json_path:
         logger.warning("Community device specs file not found in known paths.")
-        _community_specs = {"by_part": {}, "by_model": {}}
-        return _community_specs
+        return {"by_part": {}, "by_model": {}}
     try:
         with open(json_path, "r") as fh:
-            _community_specs = json.load(fh)
-        logger.info(f"Loaded community device specs: {len(_community_specs.get('by_part', {}))} by part, "
-                     f"{len(_community_specs.get('by_model', {}))} by model")
+            specs = json.load(fh)
+        logger.info(f"Loaded community device specs: {len(specs.get('by_part', {}))} by part, "
+                     f"{len(specs.get('by_model', {}))} by model")
     except Exception as e:
         logger.warning(f"Failed to load community device specs: {e}")
-        _community_specs = {"by_part": {}, "by_model": {}}
+        specs = {"by_part": {}, "by_model": {}}
 
     auto_refresh = _parse_env_bool(os.getenv("UNIFI_SPECS_AUTO_REFRESH"), default=False)
     if auto_refresh:
@@ -2387,17 +2400,17 @@ def _load_community_specs():
                 logger=logger,
             )
             if refreshed.get("by_part"):
-                _community_specs = refreshed
+                specs = refreshed
                 logger.info(
                     "Auto-refreshed community device specs: "
-                    f"{len(_community_specs.get('by_part', {}))} by part, "
-                    f"{len(_community_specs.get('by_model', {}))} by model"
+                    f"{len(specs.get('by_part', {}))} by part, "
+                    f"{len(specs.get('by_model', {}))} by model"
                 )
                 if write_cache:
                     cache_path = _writable_specs_cache_path(json_path)
                     if cache_path:
                         try:
-                            write_specs_bundle(cache_path, _community_specs)
+                            write_specs_bundle(cache_path, specs)
                             logger.info(f"Wrote refreshed community specs cache to {cache_path}")
                         except Exception as cache_err:
                             logger.warning(f"Failed to write refreshed community specs cache: {cache_err}")
@@ -2407,7 +2420,7 @@ def _load_community_specs():
                 logger.warning("Auto-refresh returned empty device specs bundle; keeping bundled specs.")
         except Exception as refresh_err:
             logger.warning(f"Auto-refresh of community device specs failed: {refresh_err}")
-    return _community_specs
+    return specs
 
 
 def _lookup_community_specs(part_number=None, model=None):

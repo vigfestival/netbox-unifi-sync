@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import tarfile
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -535,9 +537,21 @@ def refresh_specs_bundle(
 
 
 def write_specs_bundle(path: str, bundle: Dict[str, Dict[str, Any]]) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(bundle, fh, indent=2, sort_keys=True)
-        fh.write("\n")
+    # Write atomically: a partial/interleaved write (crash or concurrent writer)
+    # must never leave a truncated cache file that later fails to parse.
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".specs-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(bundle, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 __all__ = [

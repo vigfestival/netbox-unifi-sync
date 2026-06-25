@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,13 +48,18 @@ def to_controller_runtime(controller: Any, defaults: dict[str, Any]) -> Controll
 
 
 def auth_signature(cfg: ControllerRuntimeConfig) -> tuple[str, ...]:
+    # Hash the secret-bearing components instead of placing them in the tuple:
+    # the signature is used only to group controllers that share identical auth,
+    # so a collision-resistant digest preserves grouping while keeping cleartext
+    # secrets out of an in-memory structure that could be logged on error.
+    secret_digest = hashlib.sha256(
+        "\x00".join((cfg.api_key or "", cfg.password or "", cfg.mfa_secret or "")).encode("utf-8")
+    ).hexdigest()
     return (
         cfg.auth_mode,
-        cfg.api_key,
         cfg.api_key_header,
         cfg.username,
-        cfg.password,
-        cfg.mfa_secret,
+        secret_digest,
         str(cfg.verify_ssl),
         str(cfg.request_timeout),
         str(cfg.http_retries),
