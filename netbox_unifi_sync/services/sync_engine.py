@@ -698,7 +698,76 @@ def _cable_touches_patch_port(cable_obj) -> bool:
     return False
 
 
-def sync_uplink_cable(nb, nb_device, device, all_nb_devices_by_mac):
+def _cable_endpoints(cable_obj):
+    """Return ``[(interface, device), ...]`` for every object terminating *cable_obj*.
+
+    A well-formed point-to-point cable yields exactly two entries on two
+    distinct devices.  A dangling/half cable yields fewer (or terminations
+    without a resolvable device), which callers treat as malformed.
+    """
+    endpoints = []
+    try:
+        for side_attr in ("a_terminations", "b_terminations"):
+            terms = getattr(cable_obj, side_attr, None) or []
+            for term in (terms if isinstance(terms, (list, tuple)) else list(terms)):
+                endpoints.append((term, getattr(term, "device", None)))
+    except Exception as e:
+        logger.debug("_cable_endpoints: could not inspect terminations: %s", e)
+    return endpoints
+
+
+def _existing_cable_between(nb, near_device_id, far_device_id):
+    """True if a well-formed cable already connects *near_device_id* to *far_device_id*."""
+    try:
+        ifaces = list(nb.dcim.interfaces.filter(device_id=near_device_id))
+    except Exception:
+        return False
+    for iface in ifaces:
+        if not iface.cable:
+            continue
+        try:
+            cable_obj = nb.dcim.cables.get(
+                iface.cable.id if hasattr(iface.cable, "id") else iface.cable
+            )
+        except Exception:
+            continue
+        for _term, dev in _cable_endpoints(cable_obj):
+            if dev is not None and dev.id == far_device_id:
+                return True
+    return False
+
+
+def _find_free_physical_port(nb, nb_device_id, exclude=()):
+    """Return the last free (uncabled) physical port on a device, or None."""
+    try:
+        ifaces = list(nb.dcim.interfaces.filter(device_id=nb_device_id))
+    except Exception:
+        return None
+    wired = [
+        i for i in ifaces
+        if i.type and str(i.type) not in ("virtual", "lag")
+        and not str(i.type).startswith("ieee802.11")
+        and not i.cable and i.name not in exclude
+    ]
+    return wired[-1] if wired else None
+
+
+def _far_device_is_downlink(far_dev, our_unifi_id, unifi_id_by_nb_id, unifi_uplink_parent):
+    """True if *far_dev* (NetBox device) uplinks INTO our device per UniFi topology.
+
+    Such a cable is a legitimate downlink occupying the port and must not be
+    removed when reconciling our own uplink.
+    """
+    if not (far_dev and our_unifi_id and unifi_id_by_nb_id and unifi_uplink_parent):
+        return False
+    far_unifi_id = unifi_id_by_nb_id.get(far_dev.id)
+    if not far_unifi_id:
+        return False
+    return str(unifi_uplink_parent.get(far_unifi_id) or "") == str(our_unifi_id)
+
+
+def sync_uplink_cable(nb, nb_device, device, all_nb_devices_by_mac,
+                      *, unifi_id_by_nb_id=None, unifi_uplink_parent=None):
     """Create cable between device uplink port and upstream device if both exist in NetBox.
     For offline devices: remove existing cables instead of creating new ones."""
     device_name = get_device_name(device)
@@ -729,6 +798,29 @@ def sync_uplink_cable(nb, nb_device, device, all_nb_devices_by_mac):
         except Exception as e:
             logger.debug(f"Could not check cables for offline device {device_name}: {e}")
         return
+
+    # Sweep out any malformed/dangling cables on this device's ports (a cable
+    # must terminate on two distinct devices; a single-ended one is invalid data
+    # that also blocks reconciliation). Patch-panel links are left untouched.
+    try:
+        for iface in nb.dcim.interfaces.filter(device_id=nb_device.id):
+            if not iface.cable:
+                continue
+            try:
+                cab = nb.dcim.cables.get(iface.cable.id if hasattr(iface.cable, "id") else iface.cable)
+            except Exception:
+                continue
+            if not cab or _cable_touches_patch_port(cab):
+                continue
+            eps = _cable_endpoints(cab)
+            if len(eps) != 2 or len([d for (_t, d) in eps if d is not None]) != 2:
+                try:
+                    cab.delete()
+                    logger.info(f"Cable sync for {device_name}: removed malformed cable on {iface.name}")
+                except Exception as exc:
+                    logger.debug(f"Could not remove malformed cable on {device_name}:{iface.name}: {exc}")
+    except Exception as exc:
+        logger.debug(f"Malformed-cable sweep failed for {device_name}: {exc}")
 
     # Integration API: uplink.deviceId; Legacy: uplink_mac or uplink.mac
     # Prefer _detail_uplink (from device detail API) over the list-level uplink
@@ -763,6 +855,13 @@ def sync_uplink_cable(nb, nb_device, device, all_nb_devices_by_mac):
         return
 
     logger.debug(f"Cable sync for {device_name}: found upstream device {upstream_nb.name}")
+
+    # Already correctly cabled to the upstream (on any port)? Leave everything
+    # untouched — this is the common steady-state and avoids disturbing valid
+    # cables (including downlinks on other ports).
+    if _existing_cable_between(nb, nb_device.id, upstream_nb.id):
+        logger.debug(f"Cable sync for {device_name}: already cabled to upstream {upstream_nb.name}")
+        return
 
     # Find the uplink interface on our device
     our_iface = None
@@ -802,24 +901,66 @@ def sync_uplink_cable(nb, nb_device, device, all_nb_devices_by_mac):
         logger.debug(f"Cable sync for {device_name}: no suitable uplink interface found on device (port_name={uplink_port_name})")
         return
 
-    # Check if cable already exists on this interface
+    # Resolve any cable already on our chosen uplink port and decide what to do:
+    # keep a manual patch link or correct upstream, remove a malformed/dangling
+    # or wrong-upstream cable, or step aside for a legitimate downlink.
+    our_unifi_id = device.get("id")
     if our_iface.cable:
-        # If the existing cable connects to a front/rear port (patch panel),
-        # leave it alone — it was placed manually.
         try:
             existing_cable = nb.dcim.cables.get(
                 our_iface.cable.id if hasattr(our_iface.cable, "id") else our_iface.cable
             )
-            if existing_cable and _cable_touches_patch_port(existing_cable):
+        except Exception as exc:
+            logger.debug("Cable lookup failed for %s/%s: %s", device_name, our_iface.name, exc)
+            return
+
+        # Patch-panel connections are managed manually — never touch them.
+        if existing_cable and _cable_touches_patch_port(existing_cable):
+            logger.debug(
+                f"Cable sync for {device_name}: skipping {our_iface.name} "
+                f"— existing cable connects to a front/rear port (patch panel)"
+            )
+            return
+
+        endpoints = _cable_endpoints(existing_cable) if existing_cable else []
+        far_devices = [dev for (_t, dev) in endpoints if dev is not None and dev.id != nb_device.id]
+        malformed = (existing_cable is None) or (len(endpoints) != 2) or (not far_devices)
+
+        if malformed:
+            # Dangling/half cable — remove it and create the correct uplink.
+            if existing_cable is not None:
+                try:
+                    existing_cable.delete()
+                    logger.info(f"Cable sync for {device_name}: removed malformed cable on {our_iface.name}")
+                except Exception as exc:
+                    logger.warning(f"Cable sync for {device_name}: could not remove malformed cable on {our_iface.name}: {exc}")
+                    return
+        elif any(dev.id == upstream_nb.id for dev in far_devices):
+            logger.debug(f"Cable sync for {device_name}: {our_iface.name} already cabled to upstream {upstream_nb.name}")
+            return
+        elif any(_far_device_is_downlink(dev, our_unifi_id, unifi_id_by_nb_id, unifi_uplink_parent)
+                 for dev in far_devices):
+            # A downstream device's uplink legitimately occupies this port; pick
+            # a different free port for our own uplink instead of removing it.
+            alt = _find_free_physical_port(nb, nb_device.id, exclude={our_iface.name})
+            if not alt:
                 logger.debug(
-                    f"Cable sync for {device_name}: skipping {our_iface.name} "
-                    f"— existing cable connects to a front/rear port (patch panel)"
+                    f"Cable sync for {device_name}: {our_iface.name} holds a downlink "
+                    f"and no free port is available for our uplink"
                 )
                 return
-        except Exception as exc:
-            logger.debug("Cable patch-port check failed for %s/%s: %s", device_name, our_iface.name, exc)
-        logger.debug(f"Cable sync for {device_name}: cable already exists on {our_iface.name}")
-        return
+            our_iface = alt
+        else:
+            # Cable goes to the wrong upstream — remove and recreate to the correct one.
+            try:
+                existing_cable.delete()
+                logger.info(
+                    f"Cable sync for {device_name}: removed stale cable on {our_iface.name} "
+                    f"(was -> {', '.join(d.name for d in far_devices)})"
+                )
+            except Exception as exc:
+                logger.warning(f"Cable sync for {device_name}: could not remove stale cable on {our_iface.name}: {exc}")
+                return
 
     # Find a port on upstream device to connect to
     upstream_iface = None
@@ -3505,12 +3646,16 @@ def process_site(unifi, nb, site_obj, site_display_name, nb_site, nb_ubiquity, t
                         cf_mac = (cf.get("unifi_mac") or "").upper().replace(":", "")
                         if cf_mac:
                             all_nb_devices_by_mac[cf_mac] = d
-                    # Index UniFi device UUIDs for O(1) upstream lookup
+                    # Index UniFi device UUIDs for O(1) upstream lookup, and map
+                    # NetBox device id -> UniFi device id for downlink detection.
+                    unifi_id_by_nb_id = {}
                     for unifi_dev in devices:
                         dev_id = unifi_dev.get("id")
                         dev_serial = get_device_serial(unifi_dev)
                         if dev_id and dev_serial and dev_serial in all_nb_devices_by_mac:
-                            all_nb_devices_by_mac[str(dev_id)] = all_nb_devices_by_mac[dev_serial]
+                            nb_match = all_nb_devices_by_mac[dev_serial]
+                            all_nb_devices_by_mac[str(dev_id)] = nb_match
+                            unifi_id_by_nb_id[nb_match.id] = str(dev_id)
 
                     # Ensure all devices have uplink data from device detail API
                     # (sync_device_interfaces only fetches detail for devices with list-type interfaces)
@@ -3526,6 +3671,16 @@ def process_site(unifi, nb, site_obj, site_display_name, nb_site, nb_ubiquity, t
                                         if detail_uplink and isinstance(detail_uplink, dict):
                                             device["_detail_uplink"] = detail_uplink
 
+                    # Map UniFi device id -> its upstream device id (topology), so
+                    # cable sync can recognise legitimate downlinks on a port.
+                    unifi_uplink_parent = {}
+                    for device in devices:
+                        dev_id = device.get("id")
+                        uplink = device.get("_detail_uplink") or device.get("uplink") or {}
+                        parent = uplink.get("deviceId") or uplink.get("device_id") if isinstance(uplink, dict) else None
+                        if dev_id and parent:
+                            unifi_uplink_parent[str(dev_id)] = str(parent)
+
                     for device in devices:
                         device_serial = get_device_serial(device)
                         if not device_serial:
@@ -3534,7 +3689,11 @@ def process_site(unifi, nb, site_obj, site_display_name, nb_site, nb_ubiquity, t
                         nb_device = all_nb_devices_by_mac.get(device_serial)
                         if nb_device:
                             try:
-                                sync_uplink_cable(nb, nb_device, device, all_nb_devices_by_mac)
+                                sync_uplink_cable(
+                                    nb, nb_device, device, all_nb_devices_by_mac,
+                                    unifi_id_by_nb_id=unifi_id_by_nb_id,
+                                    unifi_uplink_parent=unifi_uplink_parent,
+                                )
                             except Exception as e:
                                 logger.debug(f"Could not sync uplink cable for {get_device_name(device)}: {e}")
                 except Exception as e:
