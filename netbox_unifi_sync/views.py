@@ -21,7 +21,7 @@ from .forms import (
     UnifiControllerForm,
 )
 from .jobs import enqueue_sync_job
-from .models import PluginAuditEvent, SiteMapping, SyncRun, UnifiController
+from .models import PluginAuditEvent, SiteMapping, SyncRun, SyncRunStatus, UnifiController
 from .services.audit import record_event, sanitize_error
 from .services.orchestrator import (
     get_or_create_global_settings,
@@ -407,6 +407,43 @@ def run_list_view(request: HttpRequest) -> HttpResponse:
 def run_detail_view(request: HttpRequest, pk: int) -> HttpResponse:
     run = get_object_or_404(SyncRun, pk=pk)
     return render(request, "netbox_unifi_sync/run_detail.html", {"run": run})
+
+
+@login_required
+@permission_required("netbox_unifi_sync.view_syncrun", raise_exception=True)
+def run_status_view(request: HttpRequest, pk: int) -> JsonResponse:
+    """Lightweight JSON status for a single run, used for live UI polling."""
+    mark_stale_sync_runs()
+    run = get_object_or_404(SyncRun, pk=pk)
+    terminal = run.status in (
+        SyncRunStatus.SUCCESS,
+        SyncRunStatus.FAILED,
+        SyncRunStatus.DRY_RUN,
+        SyncRunStatus.SKIPPED,
+    )
+    if run.completed and run.started:
+        elapsed_ms = int((run.completed - run.started).total_seconds() * 1000)
+    elif run.started:
+        elapsed_ms = int((timezone.now() - run.started).total_seconds() * 1000)
+    else:
+        elapsed_ms = 0
+    return JsonResponse(
+        {
+            "id": run.pk,
+            "status": run.status,
+            "status_display": run.get_status_display(),
+            "is_terminal": terminal,
+            "started": run.started.isoformat() if run.started else None,
+            "completed": run.completed.isoformat() if run.completed else None,
+            "elapsed_ms": elapsed_ms,
+            "duration_ms": run.duration_ms,
+            "controllers": run.controllers_total,
+            "sites": run.sites_total,
+            "devices": run.devices_total,
+            "summary": run.summary,
+            "error": run.error,
+        }
+    )
 
 
 @login_required

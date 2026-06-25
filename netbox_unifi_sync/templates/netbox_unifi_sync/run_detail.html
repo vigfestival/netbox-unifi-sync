@@ -10,16 +10,57 @@
   </div>
   <div class="card-body">
     <dl class="row">
-      <dt class="col-3">Status</dt><dd class="col-9">{{ run.get_status_display }}</dd>
+      <dt class="col-3">Status</dt>
+      <dd class="col-9">
+        <span id="nus-status-badge" class="badge text-bg-secondary">{{ run.get_status_display }}</span>
+        <span id="nus-live-indicator" class="ms-2 text-muted" hidden>
+          <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+          running — <span id="nus-elapsed">0</span>s elapsed (auto-refreshing…)
+        </span>
+      </dd>
       <dt class="col-3">Created</dt><dd class="col-9">{{ run.created }}</dd>
       <dt class="col-3">Started</dt><dd class="col-9">{{ run.started|default:'-' }}</dd>
       <dt class="col-3">Completed</dt><dd class="col-9">{{ run.completed|default:'-' }}</dd>
       <dt class="col-3">Duration</dt><dd class="col-9">{{ run.duration_ms }} ms</dd>
       <dt class="col-3">Mode</dt><dd class="col-9">{% if run.dry_run %}Dry run{% else %}Sync{% endif %}{% if run.cleanup_requested %} + cleanup{% endif %}</dd>
+      <dt class="col-3">Controllers</dt><dd class="col-9">{{ run.controllers_total }}</dd>
+      <dt class="col-3">Sites</dt><dd class="col-9">{{ run.sites_total }}</dd>
+      <dt class="col-3">Devices</dt><dd class="col-9">{{ run.devices_total }}</dd>
       <dt class="col-3">Summary</dt><dd class="col-9">{{ run.summary|default:'-' }}</dd>
       <dt class="col-3">Error</dt><dd class="col-9"><pre>{{ run.error|default:'-' }}</pre></dd>
       <dt class="col-3">Details</dt><dd class="col-9"><pre>{{ run.details|pprint }}</pre></dd>
     </dl>
   </div>
 </div>
+
+{% if run.status == 'pending' or run.status == 'running' %}
+<script>
+(function () {
+  const statusUrl = "{% url 'plugins:netbox_unifi_sync:run_status' run.pk %}";
+  const badge = document.getElementById('nus-status-badge');
+  const indicator = document.getElementById('nus-live-indicator');
+  const elapsed = document.getElementById('nus-elapsed');
+  indicator.hidden = false;
+  badge.className = 'badge text-bg-primary';
+
+  async function poll() {
+    try {
+      const resp = await fetch(statusUrl, { headers: { 'X-Requested-With': 'fetch' } });
+      if (resp.ok) {
+        const data = await resp.json();
+        badge.textContent = data.status_display;
+        if (data.is_terminal) {
+          // Reload once so the full details/counters render server-side.
+          window.location.reload();
+          return;
+        }
+        elapsed.textContent = Math.round((data.elapsed_ms || 0) / 1000);
+      }
+    } catch (e) { /* transient error — keep polling */ }
+    setTimeout(poll, 3000);
+  }
+  setTimeout(poll, 1500);
+})();
+</script>
+{% endif %}
 {% endblock %}

@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.24] - 2026-06-25
+
+### Fixed
+
+- **Devices skipped when a community device type already existed under its canonical name** — UniFi reports short model strings (e.g. `USW Pro Max 24 PoE`) while device types imported from the community library use canonical names (e.g. `UniFi Switch Pro Max 24 PoE`) with their own slug/part number. The plugin only looked up the type by the raw UniFi model, then tried to create a new one whose spec-derived slug collided with the existing type; the create failure was not recognised (the ORM shim raises `RuntimeError`, and NetBox can return a DRF "already exists" message rather than the raw Postgres error), so the device was silently skipped. Device types are now matched by canonical model, slug, and part number before creating, and duplicate-create recovery recognises both error styles. Auto-creation of genuinely new device types is unchanged.
+- **Automatic (scheduled) sync could stop permanently** — a historical NetBox job-reschedule race (upstream #22232) could fill `core_job` with millions of orphaned `UniFi Sync Scheduler` rows. Once present, NetBox's idempotent `enqueue_once()` kept finding an orphaned row and never re-registered a working schedule, silently stopping automatic sync. Added a `netbox_unifi_sync_cleanup_jobs` management command to purge the stale rows and re-register the schedule, plus a light self-prune on every scheduler tick so the table cannot re-bloat.
+
+### Added
+
+- **Live sync progress in the UI** — the dashboard and run-detail pages now poll the status endpoint and update the run state/elapsed time, then refresh automatically when a run finishes, instead of requiring a manual page reload. Added a per-run JSON status endpoint (`runs/<pk>/status/`).
+
 ## [0.3.23] - 2026-04-20
 
 ### Added

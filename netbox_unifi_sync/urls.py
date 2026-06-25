@@ -42,6 +42,7 @@ urlpatterns = (
 
     path("runs/", views.run_list_view, name="runs"),
     path("runs/<int:pk>/", views.run_detail_view, name="run_detail"),
+    path("runs/<int:pk>/status/", views.run_status_view, name="run_status"),
     path("audit/", views.audit_list_view, name="audit"),
 
     # JSON API endpoints (no DRF — plain JsonResponse views)

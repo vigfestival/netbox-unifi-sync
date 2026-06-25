@@ -2636,6 +2636,56 @@ def _ensure_device_type_specs_inner(nb, nb_device_type, model, specs):
         _sync_templates(nb, nb_device_type, model, nb.dcim.power_port_templates, expected_power, "power-port")
 
 
+# Markers identifying a "this already exists" failure. NetBox may surface either
+# the raw Postgres unique-constraint error or a friendly DRF validation message
+# ("device type with this slug already exists", "must be unique", ...).
+_DUPLICATE_ERROR_MARKERS = (
+    "duplicate key value violates unique constraint",
+    "already exists",
+    "must be unique",
+    "must make a unique set",
+)
+
+
+def _is_duplicate_error(message: str | None) -> bool:
+    msg = (message or "").lower()
+    return any(marker in msg for marker in _DUPLICATE_ERROR_MARKERS)
+
+
+def _match_device_type_by_specs(nb, specs, manufacturer):
+    """Find an existing device type using community-spec identifiers.
+
+    UniFi reports short model strings (e.g. "USW Pro Max 24 PoE") while device
+    types imported from the community library use canonical names (e.g.
+    "UniFi Switch Pro Max 24 PoE") with their own slug and part number. Matching
+    on the canonical model, slug, or part number lets us reuse the existing type
+    instead of attempting a create that collides with its globally-unique slug.
+    """
+    if not specs:
+        return None
+    mfr_id = manufacturer.id
+
+    canonical = specs.get("model")
+    if canonical:
+        dt = nb.dcim.device_types.get(model=canonical, manufacturer_id=mfr_id)
+        if dt:
+            return dt
+
+    slug = specs.get("slug")
+    if slug:
+        dt = nb.dcim.device_types.get(slug=slug)
+        if dt:
+            return dt
+
+    part_number = specs.get("part_number")
+    if part_number:
+        dt = nb.dcim.device_types.get(part_number=part_number, manufacturer_id=mfr_id)
+        if dt:
+            return dt
+
+    return None
+
+
 def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ips=None, unifi_site_obj=None):
     """Process a device and add it to NetBox."""
     try:
@@ -2666,9 +2716,20 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
         # Device Type creation
         logger.debug(f"Checking for existing device type: {device_model} (manufacturer ID: {nb_ubiquity.id})")
         nb_device_type = nb.dcim.device_types.get(model=device_model, manufacturer_id=nb_ubiquity.id)
+        specs = None
         if not nb_device_type:
             # Pre-populate from community specs when creating a new device type
             specs = _resolve_device_specs(device_model)
+            # UniFi's short model name may not match a device type imported under
+            # its canonical library name. Reuse the existing type (by canonical
+            # model / slug / part number) instead of colliding with its slug.
+            nb_device_type = _match_device_type_by_specs(nb, specs, nb_ubiquity)
+            if nb_device_type:
+                logger.debug(
+                    f"Matched existing device type ID {nb_device_type.id} for UniFi model "
+                    f"'{device_model}' via community-spec identifiers."
+                )
+        if not nb_device_type:
             create_data = {
                 "manufacturer": nb_ubiquity.id,
                 "model": device_model,
@@ -2693,15 +2754,19 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                 nb_device_type = nb.dcim.device_types.create(create_data)
                 if nb_device_type:
                     logger.info(f"Device type {device_model} with ID {nb_device_type.id} successfully added to NetBox.")
-            except pynetbox.core.query.RequestError as e:
-                error_message = str(e).lower()
-                if "duplicate key value violates unique constraint" in error_message:
-                    # Race condition guard: another worker may have created the same type just before us.
-                    nb_device_type = nb.dcim.device_types.get(model=device_model, manufacturer_id=nb_ubiquity.id)
-                    if not nb_device_type and create_data.get("part_number"):
-                        nb_device_type = nb.dcim.device_types.get(
-                            part_number=create_data["part_number"], manufacturer_id=nb_ubiquity.id
-                        )
+            except (pynetbox.core.query.RequestError, RuntimeError) as e:
+                # The Django-ORM shim re-raises DB integrity errors as RuntimeError,
+                # so a unique-slug collision surfaces here rather than as a
+                # pynetbox RequestError. Recognise both.
+                error_message = str(e)
+                if _is_duplicate_error(error_message):
+                    # The type already exists — either a concurrent worker created
+                    # it, or it was imported under its canonical library name and
+                    # collided on the unique slug. Recover by re-matching on every
+                    # identifier (raw model, canonical model, slug, part number).
+                    nb_device_type = nb.dcim.device_types.get(
+                        model=device_model, manufacturer_id=nb_ubiquity.id
+                    ) or _match_device_type_by_specs(nb, specs, nb_ubiquity)
                     if nb_device_type:
                         logger.debug(
                             f"Device type {device_model} already exists after duplicate create error; reusing ID {nb_device_type.id}."
@@ -2710,7 +2775,7 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                         logger.error("Failed to recover duplicate device type after create conflict")
                         return
                 else:
-                    logger.error("Failed to create device type in NetBox")
+                    logger.error(f"Failed to create device type in NetBox: {error_message}")
                     return
         # Ensure device type has correct specs (ports, PoE, part number, etc.)
         ensure_device_type_specs(nb, nb_device_type, device_model)

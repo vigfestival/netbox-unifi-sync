@@ -11,6 +11,7 @@ from netbox.jobs import JobRunner, system_job
 
 from .models import SyncRun
 from .services.audit import record_event, sanitize_error
+from .services.job_maintenance import prune_scheduler_jobs_after_tick
 from .services.orchestrator import (
     SyncConfigurationError,
     get_or_create_global_settings,
@@ -139,6 +140,10 @@ class UnifiSyncSchedulerJob(JobRunner):
         description = "Runs every minute and triggers UniFi sync when interval is due"
 
     def run(self):
+        # Keep our own core_job history trimmed so the table cannot slowly
+        # re-bloat (never touches the scheduled successor; never raises).
+        prune_scheduler_jobs_after_tick()
+
         settings = get_or_create_global_settings()
         if not scheduler_due(settings):
             return {"status": "skipped", "reason": "interval not due"}

@@ -4,6 +4,14 @@
 {% block title %}UniFi Sync Dashboard{% endblock %}
 
 {% block content %}
+<div id="nus-run-banner" class="alert alert-info d-flex align-items-center" hidden>
+  <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+  <span>
+    Sync run <a id="nus-run-link" href="#">#-</a> is
+    <strong id="nus-run-state">running</strong> — <span id="nus-run-elapsed">0</span>s elapsed.
+    This page refreshes automatically when it finishes.
+  </span>
+</div>
 <div class="row">
   <div class="col col-md-8">
     <div class="card mb-3">
@@ -82,4 +90,51 @@
     {% endif %}
   </div>
 </div>
+
+<script>
+(function () {
+  const statusUrl = "{% url 'plugins:netbox_unifi_sync:api:status' %}";
+  const runBase = "{% url 'plugins:netbox_unifi_sync:runs' %}";
+  const TERMINAL = new Set(['success', 'dry_run', 'failed', 'skipped']);
+  const banner = document.getElementById('nus-run-banner');
+  const link = document.getElementById('nus-run-link');
+  const stateEl = document.getElementById('nus-run-state');
+  const elapsedEl = document.getElementById('nus-run-elapsed');
+
+  // The newest run id present when the page first rendered.
+  const initialLatest = {{ latest_run.pk|default:'null' }};
+  let startMs = Date.now();
+  let trackedId = null;
+
+  async function poll() {
+    let next = 4000;
+    try {
+      const resp = await fetch(statusUrl, { headers: { 'X-Requested-With': 'fetch' } });
+      if (resp.ok) {
+        const data = await resp.json();
+        const run = data.latest_run;
+        if (run) {
+          const running = !TERMINAL.has(run.status);
+          if (running) {
+            if (trackedId !== run.id) { trackedId = run.id; startMs = Date.now(); }
+            banner.hidden = false;
+            link.textContent = '#' + run.id;
+            link.href = runBase + run.id + '/';
+            stateEl.textContent = run.status;
+            elapsedEl.textContent = Math.round((Date.now() - startMs) / 1000);
+            next = 3000;
+          } else if (trackedId !== null || (initialLatest !== null && run.id !== initialLatest)) {
+            // A run we were tracking just finished, or a new run appeared and
+            // completed — refresh so the tables/counters update server-side.
+            window.location.reload();
+            return;
+          }
+        }
+      }
+    } catch (e) { /* transient error — keep polling */ }
+    setTimeout(poll, next);
+  }
+  setTimeout(poll, 2000);
+})();
+</script>
 {% endblock %}
