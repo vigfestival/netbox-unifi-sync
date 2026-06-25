@@ -288,6 +288,7 @@ mutating controls.
 - [Server install guide](docs/server-install.md)
 - [NetBox plugin mode](docs/netbox-plugin.md)
 - [User interface guide](docs/ui.md)
+- [JSON endpoints](docs/api.md)
 - [Configuration reference](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Release and PyPI publish](docs/release.md)
