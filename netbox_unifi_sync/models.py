@@ -259,11 +259,20 @@ class UnifiController(_ChangeLoggingMixin, models.Model):
 
     # created / last_updated are provided by ChangeLoggingMixin
 
+    # Credential reference fields may hold raw secret values. Never expose them
+    # in NetBox change-log snapshots (ObjectChange.pre/postchange_data), which
+    # are readable via the object's changelog by any user who can reach it.
+    CREDENTIAL_FIELDS = ("api_key_ref", "password_ref", "username_ref", "mfa_secret_ref")
+
     class Meta:
         ordering = ("name",)
 
     def __str__(self) -> str:
         return self.name
+
+    def serialize_object(self, exclude=None):
+        exclude = list(exclude or []) + list(self.CREDENTIAL_FIELDS)
+        return super().serialize_object(exclude=exclude)
 
     def clean(self):
         errors = {}

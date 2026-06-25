@@ -8,6 +8,7 @@ import warnings
 import logging
 import ipaddress
 import threading
+from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib3.exceptions import InsecureRequestWarning
 # Import the unifi module instead of defining the Unifi class
@@ -2562,12 +2563,16 @@ def _ensure_device_type_specs_inner(nb, nb_device_type, model, specs):
     # weight
     if specs.get("weight") is not None:
         try:
-            w = float(specs["weight"])
+            # NetBox stores weight as a Decimal and, for non-metric units,
+            # multiplies it by a Decimal during save (to_grams). A float would
+            # raise "unsupported operand type(s) for *: 'float' and 'Decimal'".
+            # Using Decimal also makes the equality check below idempotent.
+            w = Decimal(str(specs["weight"]))
             if getattr(nb_device_type, "weight", None) != w:
                 nb_device_type.weight = w
                 nb_device_type.weight_unit = specs.get("weight_unit", "kg")
                 changed = True
-        except (ValueError, TypeError):
+        except (InvalidOperation, ValueError, TypeError):
             pass
     # Add PoE budget as comment if available
     poe = specs.get("poe_budget", 0)
@@ -2746,9 +2751,11 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                     create_data["airflow"] = specs["airflow"]
                 if specs.get("weight") is not None:
                     try:
-                        create_data["weight"] = float(specs["weight"])
+                        # Decimal (not float): NetBox multiplies weight by a
+                        # Decimal for non-kg units during save.
+                        create_data["weight"] = Decimal(str(specs["weight"]))
                         create_data["weight_unit"] = specs.get("weight_unit", "kg")
-                    except (ValueError, TypeError):
+                    except (InvalidOperation, ValueError, TypeError):
                         pass
             try:
                 nb_device_type = nb.dcim.device_types.create(create_data)

@@ -192,14 +192,30 @@ class _OrmObject:
                 instance.snapshot()
             except Exception as exc:
                 logger.debug("snapshot() failed on %r (non-fatal): %s", instance, exc)
-        if update_fields:
-            instance.save(update_fields=update_fields)
-        else:
-            instance.save()
+        # Mirror create(): wrap DB/validation errors (IntegrityError,
+        # ValidationError, ValueError, ...) as RuntimeError so callers that
+        # guard saves with `except pynetbox.core.query.RequestError` (aliased to
+        # RuntimeError in the engine) actually catch them — e.g. unique-name
+        # collisions handled by serial-disambiguation. Without this the raw
+        # Django exception escapes those handlers and aborts the whole device.
+        try:
+            if update_fields:
+                instance.save(update_fields=update_fields)
+            else:
+                instance.save()
+        except Exception as exc:
+            raise RuntimeError(
+                f"ORM save failed for {type(instance).__name__}: {exc}"
+            ) from exc
 
     def delete(self):
         instance = object.__getattribute__(self, "_instance")
-        instance.delete()
+        try:
+            instance.delete()
+        except Exception as exc:
+            raise RuntimeError(
+                f"ORM delete failed for {type(instance).__name__}: {exc}"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Representation
