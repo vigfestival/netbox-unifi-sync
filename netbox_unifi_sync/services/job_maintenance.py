@@ -58,6 +58,11 @@ def _delete_ids(ids: list[int], batch_size: int) -> int:
     Ids are collected once by the caller (a single sequential scan per
     category) and then deleted in chunks via the primary-key index, which
     keeps the work cheap even when millions of rows are involved.
+
+    Uses ``QuerySet._raw_delete`` rather than ``.delete()``: nothing references
+    ``core_job`` by foreign key, so there is no cascade to collect, and skipping
+    Django's per-object signal/collector machinery makes bulk cleanup of a
+    multi-million-row backlog roughly two orders of magnitude faster.
     """
     if not ids:
         return 0
@@ -67,8 +72,8 @@ def _delete_ids(ids: list[int], batch_size: int) -> int:
     for start in range(0, len(ids), batch_size):
         chunk = ids[start:start + batch_size]
         with transaction.atomic():
-            Job.objects.filter(pk__in=chunk).delete()
-        deleted += len(chunk)
+            qs = Job.objects.filter(pk__in=chunk)
+            deleted += qs._raw_delete(qs.db)
     return deleted
 
 

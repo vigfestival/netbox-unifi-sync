@@ -14,16 +14,18 @@ class TestDeleteIds:
 
     def test_batches_by_size_and_counts_total(self):
         Job = MagicMock()
-        recorded = []
-        Job.objects.filter.return_value.delete.side_effect = lambda: recorded.append(True)
+        # _raw_delete returns the number of rows it deleted; emulate that from the
+        # pk__in chunk size so the function's running total can be verified.
+        def fake_raw_delete(_db):
+            chunk = Job.objects.filter.call_args.kwargs["pk__in"]
+            return len(chunk)
+        Job.objects.filter.return_value._raw_delete.side_effect = fake_raw_delete
         with patch.object(jm, "_job_model", return_value=Job), \
              patch.object(jm.transaction, "atomic", lambda: nullcontext()):
             total = jm._delete_ids(list(range(250)), batch_size=100)
         assert total == 250
-        # 250 ids / 100 per batch -> 3 delete calls (100, 100, 50)
-        filter_chunks = [c.kwargs.get("pk__in") or c.args for c in Job.objects.filter.call_args_list]
-        assert len(filter_chunks) == 3
-        assert [len(Job.objects.filter.call_args_list[i].kwargs["pk__in"]) for i in range(3)] == [100, 100, 50]
+        # 250 ids / 100 per batch -> 3 batches (100, 100, 50)
+        assert [len(c.kwargs["pk__in"]) for c in Job.objects.filter.call_args_list] == [100, 100, 50]
 
 
 class TestPruneAfterTick:

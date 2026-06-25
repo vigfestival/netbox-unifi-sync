@@ -2785,16 +2785,31 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
         nb_device = nb.dcim.devices.get(site_id=site.id, serial=device_serial)
         if nb_device:
             logger.info(f"Device {device_name} with serial {device_serial} already exists. Checking IP...")
-            # Update device name if changed in UniFi
-            if nb_device.name != device_name:
+            # Update device name if changed in UniFi. A device already stored under
+            # its serial-disambiguated name (e.g. the second unit of a UBB kit whose
+            # twin owns the shared name) is left as-is to avoid colliding on the
+            # shared name on every run.
+            disambiguated_name = f"{device_name}_{device_serial}"
+            if nb_device.name not in (device_name, disambiguated_name):
                 old_name = nb_device.name
                 nb_device.name = device_name
                 try:
                     nb_device.save()
                     logger.info(f"Updated device name from '{old_name}' to '{device_name}'")
-                except pynetbox.core.query.RequestError as e:
-                    logger.warning(f"Failed to update device name to '{device_name}': {e}")
-                    nb_device.name = old_name  # Revert on failure
+                except (pynetbox.core.query.RequestError, RuntimeError) as e:
+                    nb_device.name = old_name  # Revert in-memory change
+                    if _is_duplicate_error(str(e)):
+                        # The UniFi name is taken by another unit at this site; keep
+                        # this unit under its serial-disambiguated name instead.
+                        logger.warning(f"Device name '{device_name}' already exists at site {site}; "
+                                       f"storing as '{disambiguated_name}'.")
+                        try:
+                            nb_device.name = disambiguated_name
+                            nb_device.save()
+                        except (pynetbox.core.query.RequestError, RuntimeError):
+                            nb_device.name = old_name
+                    else:
+                        logger.warning(f"Failed to update device name to '{device_name}': {e}")
             # Update device type if model changed
             current_type_id = nb_device.device_type.id if nb_device.device_type else None
             if nb_device_type and current_type_id != nb_device_type.id:
@@ -2802,7 +2817,7 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                 try:
                     nb_device.save()
                     logger.info(f"Updated device type for {device_name} to {device_model}")
-                except pynetbox.core.query.RequestError as e:
+                except (pynetbox.core.query.RequestError, RuntimeError) as e:
                     logger.warning(f"Failed to update device type for {device_name}: {e}")
             # Update role if it has changed (e.g. feature detection improved)
             current_role_id = nb_device.role.id if nb_device.role else None
@@ -2811,7 +2826,7 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                 try:
                     nb_device.save()
                     logger.info(f"Updated role for {device_name} to {nb_device_role.name}")
-                except pynetbox.core.query.RequestError as e:
+                except (pynetbox.core.query.RequestError, RuntimeError) as e:
                     logger.warning(f"Failed to update role for {device_name}: {e}")
             # Update asset tag from device name (ID/AID suffix)
             asset_tag = extract_asset_tag(device_name)
@@ -2820,7 +2835,7 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                 try:
                     nb_device.save()
                     logger.info(f"Updated asset tag for {device_name} to {asset_tag}")
-                except pynetbox.core.query.RequestError:
+                except (pynetbox.core.query.RequestError, RuntimeError):
                     logger.warning("Failed to update asset tag for existing device")
         else:
             # Create NetBox Device
@@ -2863,17 +2878,26 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
 
                 if nb_device:
                     logger.info(f"Device {device_name} serial {device_serial} with ID {nb_device.id} successfully added to NetBox.")
-            except pynetbox.core.query.RequestError as e:
+            except (pynetbox.core.query.RequestError, RuntimeError) as e:
+                # A name collision means another physical unit at this site already
+                # uses this name (e.g. the two halves of a UniFi Building Bridge /
+                # UBB kit, which the controller reports as two devices sharing one
+                # name). NetBox enforces unique device names per site, so create the
+                # second unit under a name suffixed with its serial. The ORM shim
+                # raises RuntimeError wrapping the DB integrity error, and NetBox may
+                # phrase it either as "...must be unique per site" or as a raw unique
+                # constraint violation — _is_duplicate_error() recognises both.
                 error_message = str(e)
-                if "Device name must be unique per site" in error_message:
+                if _is_duplicate_error(error_message):
+                    disambiguated = f"{device_name}_{device_serial}"
                     logger.warning(f"Device name {device_name} already exists at site {site}. "
-                                   f"Trying with name {device_name}_{device_serial}.")
+                                   f"Trying with name {disambiguated}.")
                     try:
-                        device_data['name'] = f"{device_name}_{device_serial}"
+                        device_data['name'] = disambiguated
                         nb_device = nb.dcim.devices.create(device_data)
                         if nb_device:
-                            logger.info(f"Device {device_name} with ID {nb_device.id} successfully added to NetBox.")
-                    except pynetbox.core.query.RequestError as e2:
+                            logger.info(f"Device {disambiguated} with ID {nb_device.id} successfully added to NetBox.")
+                    except (pynetbox.core.query.RequestError, RuntimeError) as e2:
                         logger.exception(f"Failed to create device {device_name} serial {device_serial} at site {site}: {e2}")
                         return
                 else:
