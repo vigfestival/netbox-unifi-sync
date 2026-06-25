@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Dedicated role for non-SNMP switches.** Switches that don't support SNMP (e.g. the USW Flex Mini) are now assigned a `SWITCH_MINI` role key — map it to a NetBox role (default name "Switch-Mini") in **Settings → role mappings**. UniFi's device payload exposes no SNMP flag, so these are matched by model: the default marker is `flex mini`, extendable via the `UNIFI_NON_SNMP_SWITCH_MODELS` environment variable (comma-separated, case-insensitive substring match). If `SWITCH_MINI` isn't mapped, such switches fall back to the `LAN`/Switch role as before.
+
+### Changed
+
+- The polled JSON status endpoints (`api/status/`, `runs/<id>/status/`) are now read-only: stale-run reaping moved to the scheduler tick (it still also runs on page loads), so the few-second dashboard poll no longer writes.
+- `InsecureRequestWarning` is suppressed only when SSL verification is actually disabled (per UniFi client) instead of globally at import.
+
 ## [0.4.0] - 2026-06-25
 
 ### Changed
