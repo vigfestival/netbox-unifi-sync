@@ -498,6 +498,17 @@ def get_device_serial(device: dict) -> str | None:
     # default: mac
     return _normalize_serial(device.get("serial") or get_device_mac(device) or device.get("id"))
 
+
+def _normalize_serial_for_compare(value) -> str:
+    """Canonical form for comparing serials between NetBox and UniFi.
+
+    Stale-device cleanup must apply the *same* normalization to both the NetBox
+    device serial and the UniFi serial set; otherwise case/separator differences
+    (e.g. a lower-case vendor serial) make a live device look absent from UniFi
+    and get deleted. Mirrors the historical NetBox-side transform exactly.
+    """
+    return str(value or "").upper().replace(":", "")
+
 def is_access_point_device(device: dict) -> bool:
     ap_flag = device.get("is_access_point")
     if isinstance(ap_flag, bool):
@@ -3320,11 +3331,11 @@ def process_site(unifi, nb, site_obj, site_display_name, nb_site, nb_ubiquity, t
                     for d in devices:
                         s = get_device_serial(d)
                         if s:
-                            unifi_serials.add(s)
+                            unifi_serials.add(_normalize_serial_for_compare(s))
                     nb_devices_at_site = list(nb.dcim.devices.filter(site_id=nb_site.id, tenant_id=tenant.id))
                     stale_devices = []
                     for nb_dev in nb_devices_at_site:
-                        if nb_dev.serial and nb_dev.serial not in unifi_serials:
+                        if nb_dev.serial and _normalize_serial_for_compare(nb_dev.serial) not in unifi_serials:
                             stale_devices.append(nb_dev.name)
                     if stale_devices:
                         logger.info(
@@ -3429,19 +3440,33 @@ def _cleanup_stale_days() -> int:
 
 
 def cleanup_stale_devices(nb, nb_site, tenant, unifi_serials):
-    """Delete devices at a site that are no longer present in UniFi.
+    """Delete UniFi devices at a site that are no longer present in UniFi.
 
     Only deletes devices that have been offline for longer than CLEANUP_STALE_DAYS.
     When CLEANUP_STALE_DAYS=0, all stale devices are deleted immediately.
+
+    Deletion is restricted to Ubiquiti-manufactured devices (the only kind this
+    plugin creates). Devices from other vendors that merely share the same
+    site+tenant — virtualization hosts, cameras, etc. created by other
+    integrations — are never touched. The plugin has historically created device
+    types under both "Ubiquiti" and "Ubiquity Networks" manufacturers, so match
+    by name substring rather than a single manufacturer id.
     """
     grace_days = _cleanup_stale_days()
-    nb_devices = list(nb.dcim.devices.filter(site_id=nb_site.id, tenant_id=tenant.id))
+    # Normalize the UniFi serial set the SAME way as the NetBox serial below, so
+    # case/separator differences never make a live device look stale and delete it.
+    normalized_unifi = {_normalize_serial_for_compare(s) for s in (unifi_serials or ()) if s}
+    nb_devices = list(nb.dcim.devices.filter(
+        site_id=nb_site.id,
+        tenant_id=tenant.id,
+        device_type__manufacturer__name__icontains="ubiqui",
+    ))
     deleted = 0
     for dev in nb_devices:
-        serial = str(dev.serial or "").upper().replace(":", "")
+        serial = _normalize_serial_for_compare(dev.serial)
         if not serial:
             continue
-        if serial in unifi_serials:
+        if serial in normalized_unifi:
             continue
         # Device not found in UniFi — check grace period
         if grace_days > 0:
