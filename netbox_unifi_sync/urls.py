@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.contrib.auth.decorators import permission_required
 from django.urls import include, path
 from netbox.views.generic import ObjectChangeLogView
 
@@ -8,12 +9,21 @@ from . import views
 
 app_name = "netbox_unifi_sync"
 
+
+def _changelog_view(permission: str):
+    """ObjectChangeLogView only enforces login; gate it behind the plugin's own
+    view permission so change history (and any data in it) isn't exposed to every
+    authenticated user."""
+    return permission_required(permission, raise_exception=True)(
+        ObjectChangeLogView.as_view(base_template="base/layout.html")
+    )
+
 urlpatterns = (
     path("", views.dashboard_view, name="dashboard"),
     path("settings/", views.settings_view, name="settings"),
     path(
         "settings/changelog/",
-        ObjectChangeLogView.as_view(base_template="base/layout.html"),
+        _changelog_view("netbox_unifi_sync.view_globalsyncsettings"),
         name="settings_changelog",
         kwargs={"model": GlobalSyncSettings, "singleton_key": "default"},
     ),
@@ -22,7 +32,7 @@ urlpatterns = (
     path("controllers/<int:pk>/edit/", views.controller_edit_view, name="controller_edit"),
     path(
         "controllers/<int:pk>/changelog/",
-        ObjectChangeLogView.as_view(base_template="base/layout.html"),
+        _changelog_view("netbox_unifi_sync.view_unificontroller"),
         name="controller_changelog",
         kwargs={"model": UnifiController},
     ),
@@ -34,7 +44,7 @@ urlpatterns = (
     path("mappings/<int:pk>/edit/", views.mapping_edit_view, name="mapping_edit"),
     path(
         "mappings/<int:pk>/changelog/",
-        ObjectChangeLogView.as_view(base_template="base/layout.html"),
+        _changelog_view("netbox_unifi_sync.view_sitemapping"),
         name="mapping_changelog",
         kwargs={"model": SiteMapping},
     ),

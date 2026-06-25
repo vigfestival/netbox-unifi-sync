@@ -6,6 +6,7 @@ from typing import Any
 
 from core.exceptions import JobFailed
 from django.contrib.auth import get_user_model
+from django_pglocks import advisory_lock
 from netbox.context import current_request
 from netbox.jobs import JobRunner, system_job
 
@@ -49,7 +50,43 @@ def _resolve_user(user_id: Any):
         return None
 
 
+# Process-cluster-wide lock key. Held for the duration of a sync run so two
+# runs (e.g. a scheduled tick overlapping a manual trigger) never execute
+# concurrently — they would race on the shared os.environ config transport
+# (patched_environ) and double-write the same NetBox objects.
+SYNC_ADVISORY_LOCK = "netbox_unifi_sync:run_sync"
+
+
 def _run_sync_job(*, dry_run: bool, cleanup_requested: bool, requested_by_id: int | None, trigger: str, job_id: str):
+    """Run one sync under a non-blocking advisory lock.
+
+    If another sync is already running anywhere in the NetBox worker cluster,
+    skip this trigger instead of running a second, overlapping sync.
+    """
+    with advisory_lock(SYNC_ADVISORY_LOCK, wait=False) as acquired:
+        if not acquired:
+            logger.warning(
+                "Skipping UniFi sync (trigger=%s): another sync run is already in progress.",
+                trigger,
+            )
+            return {
+                "mode": "skipped",
+                "reason": "another sync run already in progress",
+                "controllers": 0,
+                "sites": 0,
+                "devices": 0,
+                "details": {"status": "skipped", "reason": "another sync run already in progress"},
+            }
+        return _run_sync_job_locked(
+            dry_run=dry_run,
+            cleanup_requested=cleanup_requested,
+            requested_by_id=requested_by_id,
+            trigger=trigger,
+            job_id=job_id,
+        )
+
+
+def _run_sync_job_locked(*, dry_run: bool, cleanup_requested: bool, requested_by_id: int | None, trigger: str, job_id: str):
     run = SyncRun.objects.create(
         status="pending",
         dry_run=bool(dry_run),
