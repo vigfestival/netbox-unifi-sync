@@ -1003,6 +1003,10 @@ def sync_site_prefixes(nb, site_obj, nb_site, tenant, unifi=None):
         if legacy_networks:
             networks.extend(legacy_networks)
 
+    # Scope new prefixes to the same site VRF as device/client IPs for a
+    # consistent IPAM hierarchy. Existing prefixes (any VRF) are reused as-is.
+    vrf, _vrf_mode = get_vrf_for_site(nb, nb_site.name)
+
     seen_prefixes = set()
     for net in networks:
         prefix_cidr = _extract_prefix_cidr(net)
@@ -1027,6 +1031,8 @@ def sync_site_prefixes(nb, site_obj, nb_site, tenant, unifi=None):
             "tenant_id": tenant.id,
             "description": f"UniFi: {net_name}",
         }
+        if vrf:
+            payload["vrf_id"] = vrf.id
         payload_with_scope = dict(payload)
         payload_with_scope["scope_type"] = "dcim.site"
         payload_with_scope["scope_id"] = nb_site.id
@@ -1345,6 +1351,10 @@ def sync_client_ips(nb, site_obj, nb_site, tenant):
         logger.warning("Could not get or create unifi-client tag. Skipping client IP sync.")
         return
 
+    # Use the same site VRF as device IPs/prefixes so client IPs nest correctly
+    # in IPAM instead of being orphaned in the global table.
+    vrf, _vrf_mode = get_vrf_for_site(nb, nb_site.name)
+
     now_ts = _time.time()
 
     # Build lookup: normalized-MAC -> client data (active clients only, last_seen < 24h)
@@ -1406,9 +1416,18 @@ def sync_client_ips(nb, site_obj, nb_site, tenant):
         interface = _lookup_interface_by_mac(nb, mac_norm)
 
         try:
-            nb_ip = nb.ipam.ip_addresses.get(address=ip_with_mask)
+            nb_ip = None
+            if vrf:
+                nb_ip = nb.ipam.ip_addresses.get(address=ip_with_mask, vrf_id=vrf.id)
+            if not nb_ip:
+                nb_ip = nb.ipam.ip_addresses.get(address=ip_with_mask)
             if nb_ip:
                 needs_update = False
+                # Move an existing global client IP into the site VRF in place
+                # (rather than creating a VRF-scoped duplicate).
+                if vrf and getattr(nb_ip, "vrf_id", None) != vrf.id:
+                    nb_ip.vrf_id = vrf.id
+                    needs_update = True
                 if getattr(nb_ip, "description", None) != description:
                     nb_ip.description = description
                     needs_update = True
@@ -1434,6 +1453,8 @@ def sync_client_ips(nb, site_obj, nb_site, tenant):
                     "status": "dhcp",
                     "description": description,
                 }
+                if vrf:
+                    payload["vrf_id"] = vrf.id
                 if interface:
                     payload["assigned_object_type"] = _assignment_object_type(interface)
                     payload["assigned_object_id"] = interface.id
