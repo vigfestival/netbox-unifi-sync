@@ -200,7 +200,7 @@ Configure:
 ### 5. Run first sync
 
 UI:
-Plugins -> UniFi Sync -> Sync Dashboard -> Run now
+Plugins -> UniFi Sync -> Dashboard -> Run sync
 
 CLI:
 
@@ -257,12 +257,17 @@ For normal NetBox users, grant permissions through NetBox object permissions:
 - Manage global settings: `view/change` on `netbox_unifi_sync.GlobalSyncSettings`
 - View audit log: `view` on `netbox_unifi_sync.PluginAuditEvent`
 
-The legacy custom permission `netbox_unifi_sync.run_sync` is still accepted by
-the view for compatibility, but NetBox object permissions map naturally to
-`netbox_unifi_sync.add_syncrun`.
-The legacy custom permission `netbox_unifi_sync.test_controller` is also
-accepted, but NetBox object permissions map naturally to
-`netbox_unifi_sync.change_unificontroller`.
+The custom permission `netbox_unifi_sync.run_sync` authorises queuing a sync; for
+compatibility the view also accepts `netbox_unifi_sync.add_syncrun`. The custom
+permission `netbox_unifi_sync.test_controller` authorises the connection test;
+`netbox_unifi_sync.change_unificontroller` is also accepted.
+
+Permissions are enforced **twice**: server-side, every write view is guarded with
+`permission_required` (a user without the permission gets HTTP 403); and in the UI,
+every action button (run sync, add/edit/delete/test controllers and mappings, edit
+settings, change log) is hidden unless the user holds the matching object
+permission. A view-only user therefore sees status, history and logs but no
+mutating controls.
 
 ---
 
@@ -282,6 +287,7 @@ accepted, but NetBox object permissions map naturally to
 
 - [Server install guide](docs/server-install.md)
 - [NetBox plugin mode](docs/netbox-plugin.md)
+- [User interface guide](docs/ui.md)
 - [Configuration reference](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Release and PyPI publish](docs/release.md)

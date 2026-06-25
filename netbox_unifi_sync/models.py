@@ -270,6 +270,10 @@ class UnifiController(_ChangeLoggingMixin, models.Model):
     def __str__(self) -> str:
         return self.name
 
+    def get_last_test_color(self) -> str:
+        """NetBox palette colour for the connection-test status badge."""
+        return {"ok": "green", "error": "red"}.get(self.last_test_status, "gray")
+
     def serialize_object(self, exclude=None):
         exclude = list(exclude or []) + list(self.CREDENTIAL_FIELDS)
         return super().serialize_object(exclude=exclude)
@@ -321,6 +325,16 @@ class SiteMapping(_ChangeLoggingMixin, models.Model):
         return f"{scope}: {self.unifi_site} -> {self.netbox_site}"
 
 
+SYNC_RUN_STATUS_COLORS = {
+    SyncRunStatus.PENDING: "cyan",
+    SyncRunStatus.RUNNING: "blue",
+    SyncRunStatus.SUCCESS: "green",
+    SyncRunStatus.FAILED: "red",
+    SyncRunStatus.DRY_RUN: "purple",
+    SyncRunStatus.SKIPPED: "gray",
+}
+
+
 class SyncRun(models.Model):
     status = models.CharField(max_length=24, choices=SyncRunStatus.choices, default=SyncRunStatus.PENDING)
     trigger = models.CharField(max_length=32, default="manual")
@@ -358,6 +372,19 @@ class SyncRun(models.Model):
 
     def get_absolute_url(self):
         return reverse("plugins:netbox_unifi_sync:run_detail", args=[self.pk])
+
+    def get_status_color(self) -> str:
+        """Bootstrap/NetBox palette colour for the status badge."""
+        return SYNC_RUN_STATUS_COLORS.get(self.status, "gray")
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in (
+            SyncRunStatus.SUCCESS,
+            SyncRunStatus.FAILED,
+            SyncRunStatus.DRY_RUN,
+            SyncRunStatus.SKIPPED,
+        )
 
     def mark_running(self):
         self.status = SyncRunStatus.RUNNING
@@ -456,3 +483,6 @@ class PluginAuditEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.action} ({self.status})"
+
+    def get_status_color(self) -> str:
+        return {"success": "green", "error": "red"}.get(self.status, "gray")

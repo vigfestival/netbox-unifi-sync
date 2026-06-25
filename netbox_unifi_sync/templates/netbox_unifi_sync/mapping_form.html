@@ -1,17 +1,28 @@
 {% extends 'base/layout.html' %}
+{% load form_helpers %}
 
-{% block title %}{% if mapping %}Edit{% else %}Add{% endif %} Mapping{% endblock %}
+{% block title %}{% if mapping %}Edit{% else %}Add{% endif %} Site Mapping{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-header"><strong>{% if mapping %}Edit{% else %}Add{% endif %} Site Mapping</strong></div>
-  <div class="card-body">
-    <form method="post">
-      {% csrf_token %}
-      {{ form.as_p }}
-      <button type="submit" class="btn btn-primary">Save</button>
-      <a href="{% url 'plugins:netbox_unifi_sync:mappings' %}" class="btn btn-outline-secondary">Cancel</a>
-    </form>
+<form method="post" novalidate>
+  {% csrf_token %}
+  {% render_errors form %}
+
+  <div class="card mb-3">
+    <h2 class="card-header">Site Mapping</h2>
+    <div class="card-body">
+      {% render_field form.controller %}
+      {% render_field form.unifi_site %}
+      {% render_field form.netbox_site %}
+      {% render_field form.enabled %}
+    </div>
   </div>
-</div>
+
+  <div class="btn-list">
+    <button type="submit" class="btn btn-primary">
+      <i class="mdi mdi-content-save" aria-hidden="true"></i> Save
+    </button>
+    <a href="{% url 'plugins:netbox_unifi_sync:mappings' %}" class="btn btn-outline-secondary">Cancel</a>
+  </div>
+</form>
 {% endblock %}

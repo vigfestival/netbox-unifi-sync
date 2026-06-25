@@ -3,15 +3,26 @@
 {% block title %}Delete Site Mapping{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-header"><strong>Delete Site Mapping</strong></div>
-  <div class="card-body">
-    <p>Delete mapping <strong>{{ mapping.unifi_site }}</strong> -> <strong>{{ mapping.netbox_site }}</strong>?</p>
-    <form method="post">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-danger">Delete</button>
-      <a href="{% url 'plugins:netbox_unifi_sync:mappings' %}" class="btn btn-outline-secondary">Cancel</a>
-    </form>
+<div class="row justify-content-center">
+  <div class="col col-md-6">
+    <div class="card">
+      <h2 class="card-header text-bg-danger">Delete Site Mapping</h2>
+      <div class="card-body">
+        <div class="alert alert-warning" role="alert">
+          <i class="mdi mdi-alert" aria-hidden="true"></i>
+          Delete mapping <strong>{{ mapping.unifi_site }}</strong> &rarr; <strong>{{ mapping.netbox_site }}</strong>?
+        </div>
+        <form method="post">
+          {% csrf_token %}
+          <div class="btn-list">
+            <button type="submit" class="btn btn-danger">
+              <i class="mdi mdi-trash-can-outline" aria-hidden="true"></i> Delete
+            </button>
+            <a href="{% url 'plugins:netbox_unifi_sync:mappings' %}" class="btn btn-outline-secondary">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

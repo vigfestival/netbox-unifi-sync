@@ -17,7 +17,7 @@
 {# 1 · GENERAL                                                               #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header"><strong>General</strong></div>
+  <h2 class="card-header">General</h2>
   <div class="card-body">
 
     {# enabled #}
@@ -51,7 +51,7 @@
 {# 2 · DEVICE IDENTIFICATION                                                 #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header"><strong>Device Identification</strong></div>
+  <h2 class="card-header">Device Identification</h2>
   <div class="card-body">
 
     {# serial_mode #}
@@ -85,7 +85,7 @@
 {# 3 · TAGS & ASSET TAGS                                                     #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header"><strong>Tags &amp; Asset Tags</strong></div>
+  <h2 class="card-header">Tags &amp; Asset Tags</h2>
   <div class="card-body">
 
     {# tag_strategy #}
@@ -134,7 +134,7 @@
 {# 4 · SYNC TOGGLES                                                          #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header"><strong>Sync Toggles</strong></div>
+  <h2 class="card-header">Sync Toggles</h2>
   <div class="card-body">
     <p class="text-muted small mb-3">Choose which UniFi data types are synchronised to NetBox.</p>
     <div class="row row-cols-1 row-cols-md-2 g-2">
@@ -261,7 +261,7 @@
 {# 5 · VRF / IP ROUTING                                                      #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header"><strong>VRF / IP Routing</strong></div>
+  <h2 class="card-header">VRF / IP Routing</h2>
   <div class="card-body">
 
     <div class="row">
@@ -309,7 +309,7 @@
 {# 6 · DHCP / IPAM                                                           #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header"><strong>DHCP / IPAM</strong></div>
+  <h2 class="card-header">DHCP / IPAM</h2>
   <div class="card-body">
 
     <div class="row row-cols-1 row-cols-md-2 g-2 mb-3">
@@ -354,7 +354,7 @@
 {# 7 · CLEANUP                                                               #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header"><strong>Cleanup</strong></div>
+  <h2 class="card-header">Cleanup</h2>
   <div class="card-body">
 
     <div class="form-check mb-3">
@@ -378,7 +378,7 @@
 {# 8 · SCHEDULING                                                            #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header"><strong>Scheduling</strong></div>
+  <h2 class="card-header">Scheduling</h2>
   <div class="card-body">
 
     <div class="form-check mb-3">
@@ -413,13 +413,13 @@
 {# 9 · HTTP & SSL  (collapsed by default)                                    #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <strong>HTTP &amp; SSL</strong>
+  <h2 class="card-header d-flex justify-content-between align-items-center">
+    <span>HTTP &amp; SSL</span>
     <button class="btn btn-sm btn-outline-secondary" type="button"
             data-bs-toggle="collapse" data-bs-target="#section-http" aria-expanded="false">
       Show / hide
     </button>
-  </div>
+  </h2>
   <div class="collapse" id="section-http">
     <div class="card-body">
 
@@ -473,13 +473,13 @@
 {# 10 · CONCURRENCY  (collapsed by default)                                  #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <strong>Concurrency</strong>
+  <h2 class="card-header d-flex justify-content-between align-items-center">
+    <span>Concurrency</span>
     <button class="btn btn-sm btn-outline-secondary" type="button"
             data-bs-toggle="collapse" data-bs-target="#section-concurrency" aria-expanded="false">
       Show / hide
     </button>
-  </div>
+  </h2>
   <div class="collapse" id="section-concurrency">
     <div class="card-body">
       <div class="row">
@@ -524,13 +524,13 @@
 {# 11 · DEVICE SPECS CACHE  (collapsed by default)                           #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 <div class="card mb-3">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <strong>Device Specs Cache</strong>
+  <h2 class="card-header d-flex justify-content-between align-items-center">
+    <span>Device Specs Cache</span>
     <button class="btn btn-sm btn-outline-secondary" type="button"
             data-bs-toggle="collapse" data-bs-target="#section-specs" aria-expanded="false">
       Show / hide
     </button>
-  </div>
+  </h2>
   <div class="collapse" id="section-specs">
     <div class="card-body">
 
@@ -599,10 +599,13 @@
 </div>
 {% endif %}
 
-{# ── save button ────────────────────────────────────────────────────────── #}
-<button type="submit" class="btn btn-primary btn-lg w-100">
-  <i class="mdi mdi-content-save me-1"></i> Save Settings
-</button>
+{# ── actions ────────────────────────────────────────────────────────────── #}
+<div class="btn-list mb-3">
+  <button type="submit" class="btn btn-primary">
+    <i class="mdi mdi-content-save" aria-hidden="true"></i> Save
+  </button>
+  <a href="{% url 'plugins:netbox_unifi_sync:dashboard' %}" class="btn btn-outline-secondary">Cancel</a>
+</div>
 
 </form>
 {% endblock %}

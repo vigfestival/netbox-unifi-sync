@@ -4,7 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-## [0.3.24] - 2026-06-25
+## [0.4.0] - 2026-06-25
+
+### Changed
+
+- **UI reworked to follow NetBox's native design system.** All plugin pages now use NetBox's standard cards/panels (`<h2 class="card-header">`), tables, status badges (`{% badge %}` with the NetBox colour palette), Bootstrap utility classes, alerts and buttons (mdi icons + NetBox button colours). No custom global CSS is introduced and dark/light mode is respected throughout.
+  - **Navigation:** the plugin menu is grouped into *Overview* (Dashboard), *Configuration* (Controllers, Site Mappings, Settings) and *Monitoring* (Job History, Logs), each menu item carrying the appropriate `view`/`add` permission and Add/Run buttons (`PluginMenuButton`).
+  - **Dashboard:** NetBox-style status panels for Sync Status (current status, last/next sync, interval), API Status (NetBox + UniFi reachability badges, enabled controllers) and Latest Run metrics (controllers/sites/devices, duration), plus dedicated **Run sync** and **Dry run** buttons and live auto-refresh while a run is in progress.
+  - **Settings:** rendered as NetBox fieldset/card sections with per-field help text and validation errors, secret fields masked (`PasswordInput`) and never shown in clear text, and a NetBox Save/Cancel action bar.
+  - **Forms** (Controllers, Site Mappings) now render via NetBox's `render_field`/`render_errors` form helpers for native field layout, help text and error display.
+  - **Job History & Logs:** NetBox list views with status badges and filter panels (status + search). Logs are filterable by status and searchable.
+  - **Permissions:** every action button (run sync, add/edit/delete/test controllers and mappings, edit settings) is shown only when the user holds the matching NetBox object permission, on top of the existing server-side `permission_required` checks.
+
+### Added
+
+- New colour-helper methods (`SyncRun.get_status_color`, `UnifiController.get_last_test_color`, `PluginAuditEvent.get_status_color`) backing the status badges.
+- `.env.example` documenting the environment variables the sync engine honours (for CLI/advanced use; the Settings UI remains the normal configuration path).
 
 ### Fixed
 

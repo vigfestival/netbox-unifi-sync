@@ -21,7 +21,16 @@ from .forms import (
     UnifiControllerForm,
 )
 from .jobs import enqueue_sync_job
-from .models import PluginAuditEvent, SiteMapping, SyncRun, SyncRunStatus, UnifiController
+from datetime import timedelta
+
+from .models import (
+    PluginAuditEvent,
+    SchedulerState,
+    SiteMapping,
+    SyncRun,
+    SyncRunStatus,
+    UnifiController,
+)
 from .services.audit import record_event, sanitize_error
 from .services.orchestrator import (
     get_or_create_global_settings,
@@ -83,7 +92,8 @@ def dashboard_view(request: HttpRequest) -> HttpResponse:
             )
         form = RunActionForm(request.POST)
         if form.is_valid():
-            dry_run = bool(form.cleaned_data.get("dry_run"))
+            # A dedicated "Dry run" submit button forces dry-run mode.
+            dry_run = bool(form.cleaned_data.get("dry_run")) or "_dryrun" in request.POST
             cleanup = bool(form.cleaned_data.get("cleanup"))
             try:
                 job = enqueue_sync_job(
@@ -120,13 +130,43 @@ def dashboard_view(request: HttpRequest) -> HttpResponse:
                 )
             return redirect("plugins:netbox_unifi_sync:dashboard")
 
+    controllers = list(UnifiController.objects.order_by("name"))
+    enabled_controllers = [c for c in controllers if c.enabled]
+
+    # UniFi API status: aggregate of the enabled controllers' last connection test.
+    if not enabled_controllers:
+        unifi_status, unifi_status_color = "No controllers", "gray"
+    elif all(c.last_test_status == "ok" for c in enabled_controllers):
+        unifi_status, unifi_status_color = "Reachable", "green"
+    elif any(c.last_test_status == "error" for c in enabled_controllers):
+        unifi_status, unifi_status_color = "Error", "red"
+    else:
+        unifi_status, unifi_status_color = "Unknown", "gray"
+
+    # Next scheduled run (if scheduling is enabled).
+    next_sync = None
+    if settings_obj.enabled and settings_obj.schedule_enabled:
+        state = SchedulerState.objects.filter(key="default").first()
+        if state and state.last_auto_sync:
+            next_sync = state.last_auto_sync + timedelta(minutes=settings_obj.sync_interval_minutes)
+        else:
+            next_sync = timezone.now()
+
     context = {
         "settings": settings_obj,
         "latest_run": latest_run,
         "recent_runs": recent_runs,
         "form": form,
-        "controller_count": UnifiController.objects.filter(enabled=True).count(),
+        "controllers": controllers,
+        "controller_count": len(enabled_controllers),
         "can_queue_sync": _can_queue_sync(request.user),
+        # NetBox runs the plugin in-process, so the NetBox API is reachable
+        # whenever this page renders.
+        "netbox_status": "Reachable",
+        "netbox_status_color": "green",
+        "unifi_status": unifi_status,
+        "unifi_status_color": unifi_status_color,
+        "next_sync": next_sync,
     }
     return render(request, "netbox_unifi_sync/dashboard.html", context)
 
@@ -450,8 +490,22 @@ def run_status_view(request: HttpRequest, pk: int) -> JsonResponse:
 @login_required
 @permission_required("netbox_unifi_sync.view_pluginauditevent", raise_exception=True)
 def audit_list_view(request: HttpRequest) -> HttpResponse:
-    events = PluginAuditEvent.objects.select_related("actor").order_by("-created")[:200]
-    return render(request, "netbox_unifi_sync/audit.html", {"events": events})
+    queryset = PluginAuditEvent.objects.select_related("actor").order_by("-created")
+    status = (request.GET.get("status") or "").strip()
+    if status in ("success", "error"):
+        queryset = queryset.filter(status=status)
+    q = (request.GET.get("q") or "").strip()
+    if q:
+        queryset = queryset.filter(
+            Q(action__icontains=q) | Q(message__icontains=q) | Q(target__icontains=q)
+        )
+    total = queryset.count()
+    events = queryset[:200]
+    return render(
+        request,
+        "netbox_unifi_sync/audit.html",
+        {"events": events, "total": total, "status": status, "q": q},
+    )
 
 
 @login_required

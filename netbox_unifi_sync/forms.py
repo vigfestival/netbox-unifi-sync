@@ -292,14 +292,28 @@ class SiteMappingForm(forms.ModelForm):
 
 
 class RunActionForm(forms.Form):
-    dry_run = forms.BooleanField(required=False)
-    cleanup = forms.BooleanField(required=False)
+    dry_run = forms.BooleanField(
+        required=False,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+    cleanup = forms.BooleanField(
+        required=False,
+        label="Run stale-device cleanup",
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
 
 
 class RunFilterForm(forms.Form):
     status = forms.ChoiceField(
         required=False,
         choices=[("", "Any"), ("pending", "Pending"), ("running", "Running"), ("dry_run", "Dry run"), ("success", "Success"), ("failed", "Failed")],
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
-    q = forms.CharField(required=False)
-    limit = forms.IntegerField(required=False, min_value=1, max_value=500, initial=100)
+    q = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "summary or error"}),
+    )
+    limit = forms.IntegerField(
+        required=False, min_value=1, max_value=500, initial=100,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )

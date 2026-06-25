@@ -1,44 +1,68 @@
 {% extends 'base/layout.html' %}
+{% load helpers %}
 
 {% block title %}UniFi Controllers{% endblock %}
 
 {% block content %}
 <div class="card">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <strong>Controllers</strong>
-    <a href="{% url 'plugins:netbox_unifi_sync:controller_add' %}" class="btn btn-sm btn-primary">Add controller</a>
-  </div>
+  <h2 class="card-header d-flex justify-content-between align-items-center">
+    <span>Controllers</span>
+    {% if perms.netbox_unifi_sync.add_unificontroller %}
+    <a href="{% url 'plugins:netbox_unifi_sync:controller_add' %}" class="btn btn-sm btn-primary">
+      <i class="mdi mdi-plus-thick" aria-hidden="true"></i> Add controller
+    </a>
+    {% endif %}
+  </h2>
   <div class="table-responsive">
-    <table class="table table-hover mb-0">
+    <table class="table table-hover object-list mb-0">
       <thead>
-        <tr><th>Name</th><th>URL</th><th>Auth</th><th>Enabled</th><th>Last test</th><th></th></tr>
+        <tr>
+          <th>Name</th><th>URL</th><th>Auth</th><th>Enabled</th>
+          <th>Last test</th><th>Tested</th><th class="text-end">Actions</th>
+        </tr>
       </thead>
       <tbody>
       {% for c in controllers %}
         <tr>
           <td>{{ c.name }}</td>
-          <td>{{ c.base_url }}</td>
+          <td><a href="{{ c.base_url }}" rel="noopener noreferrer" target="_blank">{{ c.base_url }}</a></td>
           <td>{{ c.get_auth_mode_display }}</td>
-          <td>{{ c.enabled }}</td>
+          <td>{% checkmark c.enabled %}</td>
           <td>
             {% if c.last_test_status %}
-              {{ c.last_test_status }}{% if c.last_tested %} ({{ c.last_tested }}){% endif %}
+              {% badge c.last_test_status|upper bg_color=c.get_last_test_color %}
+              {% if c.last_test_error %}<i class="mdi mdi-information-outline text-danger" title="{{ c.last_test_error }}"></i>{% endif %}
             {% else %}
-              -
+              <span class="text-muted">&mdash;</span>
             {% endif %}
           </td>
-          <td class="text-end">
+          <td>{{ c.last_tested|placeholder }}</td>
+          <td class="text-end text-nowrap">
+            {% if perms.netbox_unifi_sync.change_unificontroller or perms.netbox_unifi_sync.test_controller %}
             <form method="post" action="{% url 'plugins:netbox_unifi_sync:controller_test' c.pk %}" class="d-inline">
               {% csrf_token %}
-              <button type="submit" class="btn btn-sm btn-outline-secondary">Test</button>
+              <button type="submit" class="btn btn-sm btn-info" title="Test connection">
+                <i class="mdi mdi-lan-connect" aria-hidden="true"></i> Test
+              </button>
             </form>
-            <a href="{% url 'plugins:netbox_unifi_sync:controller_edit' c.pk %}" class="btn btn-sm btn-outline-primary">Edit</a>
-            <a href="{% url 'plugins:netbox_unifi_sync:controller_changelog' c.pk %}" class="btn btn-sm btn-outline-secondary">Change Log</a>
-            <a href="{% url 'plugins:netbox_unifi_sync:controller_delete' c.pk %}" class="btn btn-sm btn-outline-danger">Delete</a>
+            {% endif %}
+            <a href="{% url 'plugins:netbox_unifi_sync:controller_changelog' c.pk %}" class="btn btn-sm btn-outline-secondary" title="Change log">
+              <i class="mdi mdi-history" aria-hidden="true"></i>
+            </a>
+            {% if perms.netbox_unifi_sync.change_unificontroller %}
+            <a href="{% url 'plugins:netbox_unifi_sync:controller_edit' c.pk %}" class="btn btn-sm btn-warning" title="Edit">
+              <i class="mdi mdi-pencil" aria-hidden="true"></i>
+            </a>
+            {% endif %}
+            {% if perms.netbox_unifi_sync.delete_unificontroller %}
+            <a href="{% url 'plugins:netbox_unifi_sync:controller_delete' c.pk %}" class="btn btn-sm btn-danger" title="Delete">
+              <i class="mdi mdi-trash-can-outline" aria-hidden="true"></i>
+            </a>
+            {% endif %}
           </td>
         </tr>
       {% empty %}
-        <tr><td colspan="6" class="text-muted">No controllers configured.</td></tr>
+        <tr><td colspan="7" class="text-center text-muted">&mdash; No controllers configured &mdash;</td></tr>
       {% endfor %}
       </tbody>
     </table>

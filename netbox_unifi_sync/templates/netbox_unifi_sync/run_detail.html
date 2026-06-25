@@ -4,33 +4,51 @@
 
 {% block content %}
 <div class="card mb-3">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <strong>Sync Run #{{ run.pk }}</strong>
-    <a href="{% url 'plugins:netbox_unifi_sync:runs' %}" class="btn btn-sm btn-outline-primary">Back</a>
-  </div>
+  <h2 class="card-header d-flex justify-content-between align-items-center">
+    <span>Sync Run #{{ run.pk }}</span>
+    <a href="{% url 'plugins:netbox_unifi_sync:runs' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="mdi mdi-arrow-left" aria-hidden="true"></i> Back to history
+    </a>
+  </h2>
   <div class="card-body">
     <dl class="row">
-      <dt class="col-3">Status</dt>
-      <dd class="col-9">
-        <span id="nus-status-badge" class="badge text-bg-secondary">{{ run.get_status_display }}</span>
+      <dt class="col-sm-3">Status</dt>
+      <dd class="col-sm-9">
+        <span id="nus-status-badge" class="badge text-bg-{{ run.get_status_color }}">{{ run.get_status_display }}</span>
         <span id="nus-live-indicator" class="ms-2 text-muted" hidden>
           <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-          running — <span id="nus-elapsed">0</span>s elapsed (auto-refreshing…)
+          running &mdash; <span id="nus-elapsed">0</span>s elapsed (auto-refreshing&hellip;)
         </span>
       </dd>
-      <dt class="col-3">Created</dt><dd class="col-9">{{ run.created }}</dd>
-      <dt class="col-3">Started</dt><dd class="col-9">{{ run.started|default:'-' }}</dd>
-      <dt class="col-3">Completed</dt><dd class="col-9">{{ run.completed|default:'-' }}</dd>
-      <dt class="col-3">Duration</dt><dd class="col-9">{{ run.duration_ms }} ms</dd>
-      <dt class="col-3">Mode</dt><dd class="col-9">{% if run.dry_run %}Dry run{% else %}Sync{% endif %}{% if run.cleanup_requested %} + cleanup{% endif %}</dd>
-      <dt class="col-3">Controllers</dt><dd class="col-9">{{ run.controllers_total }}</dd>
-      <dt class="col-3">Sites</dt><dd class="col-9">{{ run.sites_total }}</dd>
-      <dt class="col-3">Devices</dt><dd class="col-9">{{ run.devices_total }}</dd>
-      <dt class="col-3">Summary</dt><dd class="col-9">{{ run.summary|default:'-' }}</dd>
-      <dt class="col-3">Error</dt><dd class="col-9"><pre>{{ run.error|default:'-' }}</pre></dd>
-      <dt class="col-3">Details</dt><dd class="col-9"><pre>{{ run.details|pprint }}</pre></dd>
+      <dt class="col-sm-3">Trigger</dt><dd class="col-sm-9">{{ run.trigger }}</dd>
+      <dt class="col-sm-3">Mode</dt>
+      <dd class="col-sm-9">
+        {% if run.dry_run %}<span class="badge text-bg-purple">Dry run</span>{% else %}<span class="badge text-bg-blue">Sync</span>{% endif %}
+        {% if run.cleanup_requested %}<span class="badge text-bg-secondary">cleanup</span>{% endif %}
+      </dd>
+      <dt class="col-sm-3">Requested by</dt><dd class="col-sm-9">{{ run.requested_by|default:'system' }}</dd>
+      <dt class="col-sm-3">Created</dt><dd class="col-sm-9">{{ run.created }}</dd>
+      <dt class="col-sm-3">Started</dt><dd class="col-sm-9">{{ run.started|default:'—' }}</dd>
+      <dt class="col-sm-3">Completed</dt><dd class="col-sm-9">{{ run.completed|default:'—' }}</dd>
+      <dt class="col-sm-3">Duration</dt><dd class="col-sm-9">{{ run.duration_ms }} ms</dd>
+      <dt class="col-sm-3">Controllers</dt><dd class="col-sm-9">{{ run.controllers_total }}</dd>
+      <dt class="col-sm-3">Sites</dt><dd class="col-sm-9">{{ run.sites_total }}</dd>
+      <dt class="col-sm-3">Devices</dt><dd class="col-sm-9">{{ run.devices_total }}</dd>
+      <dt class="col-sm-3">Summary</dt><dd class="col-sm-9">{{ run.summary|default:'—' }}</dd>
     </dl>
   </div>
+</div>
+
+{% if run.error %}
+<div class="card mb-3">
+  <h2 class="card-header text-bg-danger">Error</h2>
+  <div class="card-body"><pre class="mb-0">{{ run.error }}</pre></div>
+</div>
+{% endif %}
+
+<div class="card mb-3">
+  <h2 class="card-header">Details</h2>
+  <div class="card-body"><pre class="mb-0">{{ run.details|pprint }}</pre></div>
 </div>
 
 {% if run.status == 'pending' or run.status == 'running' %}
@@ -41,7 +59,7 @@
   const indicator = document.getElementById('nus-live-indicator');
   const elapsed = document.getElementById('nus-elapsed');
   indicator.hidden = false;
-  badge.className = 'badge text-bg-primary';
+  badge.className = 'badge text-bg-blue';
 
   async function poll() {
     try {
@@ -50,7 +68,6 @@
         const data = await resp.json();
         badge.textContent = data.status_display;
         if (data.is_terminal) {
-          // Reload once so the full details/counters render server-side.
           window.location.reload();
           return;
         }
