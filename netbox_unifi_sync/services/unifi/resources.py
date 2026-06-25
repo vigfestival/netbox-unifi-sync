@@ -136,7 +136,18 @@ class BaseResource:
         if getattr(self.unifi, "api_style", None) == "integration":
             offset = 0
             all_items = []
+            # Safety cap: bounds the loop if a controller ignores `offset` and
+            # keeps returning non-empty pages without a totalCount.
+            max_pages = 10000
+            pages = 0
             while True:
+                pages += 1
+                if pages > max_pages:
+                    logger.warning(
+                        f"Pagination safety cap reached for {self.endpoint} at "
+                        f"{len(all_items)} items; stopping."
+                    )
+                    break
                 params = {"offset": offset, "limit": limit}
                 if filter_query:
                     params["filter"] = filter_query
@@ -154,10 +165,16 @@ class BaseResource:
                     break
                 offset += len(batch)
                 total_count = response.get("totalCount")
-                if isinstance(total_count, int) and offset >= total_count:
-                    break
-                if len(batch) < response.get("limit", limit):
-                    break
+                if isinstance(total_count, int):
+                    # totalCount is authoritative — keep paging until we reach it
+                    # regardless of per-page size (the server may cap page size).
+                    if offset >= total_count:
+                        break
+                    continue
+                # No totalCount: do NOT stop merely because a page was smaller
+                # than the requested limit — that silently truncates when the
+                # server caps page size below the request. Only an empty page
+                # terminates (bounded by the safety cap above).
             logger.debug(f"Retrieved total {len(all_items)} items from {self.endpoint}")
             return all_items
 

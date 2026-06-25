@@ -900,8 +900,14 @@ class Unifi:
         offset = 0
         limit = 200
         sites = []
+        max_pages = 10000
+        pages = 0
 
         while True:
+            pages += 1
+            if pages > max_pages:
+                logger.warning(f"Site pagination safety cap reached at {len(sites)} sites; stopping.")
+                break
             response = self.make_request(
                 "/sites",
                 "GET",
@@ -922,10 +928,14 @@ class Unifi:
 
             offset += len(data)
             total_count = response.get("totalCount")
-            if isinstance(total_count, int) and offset >= total_count:
-                break
-            if len(data) < response.get("limit", limit):
-                break
+            if isinstance(total_count, int):
+                # totalCount is authoritative — keep paging until reached
+                # regardless of per-page size.
+                if offset >= total_count:
+                    break
+                continue
+            # No totalCount: only an empty page terminates (a short page does not
+            # imply the end if the server caps page size). Bounded by max_pages.
 
         site_dict = {}
         for site in sites:
