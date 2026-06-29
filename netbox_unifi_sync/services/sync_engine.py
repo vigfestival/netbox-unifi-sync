@@ -3960,9 +3960,11 @@ def cleanup_orphan_ips(nb, tenant):
     band IPs, anything created outside the sync). It now only deletes an orphan
     when ALL of the following hold:
       * it carries a sync-owned tag (see ``_SYNC_OWNED_IP_TAGS``);
-      * its status is ``active`` (reserved/deprecated IPs are kept);
+      * its status is not ``reserved``/``deprecated`` (deliberately-held IPs);
       * it is not a management / out-of-band address (see ``_ip_is_mgmt_or_oob``).
-    Everything else is preserved.
+    Everything else is preserved. Note that sync-owned client leases carry the
+    ``dhcp`` status, so reservation/management state (not ``active`` vs ``dhcp``)
+    is what protects an address here.
     """
     from ipam.models import IPAddress
     all_ips = list(nb.ipam.ip_addresses.filter(tenant_id=tenant.id))
@@ -3980,9 +3982,9 @@ def cleanup_orphan_ips(nb, tenant):
         if not (ip_tags & _SYNC_OWNED_IP_TAGS):
             preserved += 1
             continue  # not sync-owned -> never auto-delete
-        if str(ip.status) != "active" or _ip_is_mgmt_or_oob(ip):
+        if str(ip.status) in ("reserved", "deprecated") or _ip_is_mgmt_or_oob(ip):
             preserved += 1
-            continue  # reserved / mgmt / oob / role-tagged -> preserve
+            continue  # reserved / deprecated / mgmt / oob / role-tagged -> preserve
         try:
             ip.delete()
             deleted += 1
