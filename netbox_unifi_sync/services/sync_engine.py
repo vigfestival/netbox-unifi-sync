@@ -1644,16 +1644,25 @@ def sync_client_ips(nb, site_obj, nb_site, tenant):
         tag_obj = tag_qs.first()
 
         for nb_ip in _IPAddress.objects.filter(tags=tag_obj):
-            # Only touch IPs assigned to interfaces of devices at this site
-            if nb_ip.assigned_object_type_id != ct_iface.id or not nb_ip.assigned_object_id:
-                continue
-            try:
-                iface = _Interface.objects.select_related("device__site").get(
-                    pk=nb_ip.assigned_object_id)
+            # Scope this cleanup to client IPs belonging to the site being
+            # processed. An interface-assigned IP is in scope when its
+            # interface's device is at this site. An *unassigned* client IP
+            # (e.g. a wireless end-user client whose MAC has no NetBox interface)
+            # is attributed to the site by its VRF — without a site VRF we cannot
+            # safely tell which site it belongs to, so we leave it alone.
+            if nb_ip.assigned_object_type_id == ct_iface.id and nb_ip.assigned_object_id:
+                try:
+                    iface = _Interface.objects.select_related("device__site").get(
+                        pk=nb_ip.assigned_object_id)
+                except _Interface.DoesNotExist:
+                    continue
                 if not iface.device or iface.device.site_id != nb_site.id:
                     continue
-            except _Interface.DoesNotExist:
-                continue
+            elif nb_ip.assigned_object_id:
+                continue  # assigned to a non-interface object -> not ours
+            else:
+                if not vrf or getattr(nb_ip, "vrf_id", None) != vrf.id:
+                    continue  # unassigned: only handle this site's VRF
 
             # Parse stored MAC from description
             stored_mac = _parse_client_mac_from_description(nb_ip.description)
@@ -3023,6 +3032,13 @@ def _match_device_type_by_specs(nb, specs, manufacturer):
 # externally/manually managed and preserved.
 _SYNC_OWNED_IP_TAGS = {"unifi-client"}
 
+# Tags whose IPs have their own activity-based lifecycle in sync_client_ips()
+# (kept while the client is active, removed when it goes offline). The generic
+# orphan-IP sweep must NOT delete these: many client leases are intentionally
+# unassigned (wireless end-user clients have no NetBox interface), and deleting
+# them just races the client sync into a create/delete loop.
+_CLIENT_LIFECYCLE_TAGS = {"unifi-client"}
+
 # Substrings that mark an IP as a deliberately-managed management or
 # out-of-band address that must never be auto-deleted by the sync.
 _PROTECTED_IP_KEYWORDS = ("mgmt", "oob", "out-of-band", "out of band",
@@ -3959,12 +3975,12 @@ def cleanup_orphan_ips(nb, tenant):
     silently destroy hand-managed addresses (reserved IPs, management / out-of-
     band IPs, anything created outside the sync). It now only deletes an orphan
     when ALL of the following hold:
+      * it is not a client lease (see ``_CLIENT_LIFECYCLE_TAGS`` — those are
+        owned by ``sync_client_ips()`` and must not be touched here);
       * it carries a sync-owned tag (see ``_SYNC_OWNED_IP_TAGS``);
       * its status is not ``reserved``/``deprecated`` (deliberately-held IPs);
       * it is not a management / out-of-band address (see ``_ip_is_mgmt_or_oob``).
-    Everything else is preserved. Note that sync-owned client leases carry the
-    ``dhcp`` status, so reservation/management state (not ``active`` vs ``dhcp``)
-    is what protects an address here.
+    Everything else is preserved.
     """
     from ipam.models import IPAddress
     all_ips = list(nb.ipam.ip_addresses.filter(tenant_id=tenant.id))
@@ -3979,6 +3995,9 @@ def cleanup_orphan_ips(nb, tenant):
         except Exception:
             continue  # can't verify -> don't delete
         ip_tags = {t.name for t in ip.tags.all()}
+        if ip_tags & _CLIENT_LIFECYCLE_TAGS:
+            preserved += 1
+            continue  # client leases are managed by sync_client_ips(), not here
         if not (ip_tags & _SYNC_OWNED_IP_TAGS):
             preserved += 1
             continue  # not sync-owned -> never auto-delete
