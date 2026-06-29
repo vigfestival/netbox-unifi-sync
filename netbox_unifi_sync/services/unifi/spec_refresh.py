@@ -545,6 +545,14 @@ def write_specs_bundle(path: str, bundle: Dict[str, Dict[str, Any]]) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(bundle, fh, indent=2, sort_keys=True)
             fh.write("\n")
+        # tempfile.mkstemp() creates the file 0600; os.replace() preserves that
+        # mode, which leaves the spec cache unreadable when a refresh runs as a
+        # different user (e.g. root) than the NetBox worker (netbox). Make it
+        # world-readable before swapping it into place so the worker can load it.
+        try:
+            os.chmod(tmp_path, 0o644)
+        except OSError:
+            pass
         os.replace(tmp_path, path)
     except Exception:
         try:
