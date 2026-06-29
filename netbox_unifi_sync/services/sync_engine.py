@@ -4044,7 +4044,14 @@ def cleanup_device_types(nb, nb_ubiquity):
                 deleted += 1
                 logger.info(f"Cleanup: deleted unused device type {model}")
             except Exception as e:
-                logger.warning(f"Cleanup: failed to delete unused device type {model}: {e}")
+                msg = str(e).lower()
+                if "protected foreign key" in msg or "referenced through" in msg:
+                    # device_count read as 0 but the type is still referenced by
+                    # devices (count can lag right after a sync). Expected and not
+                    # actionable — keep it quietly instead of warning each run.
+                    logger.debug(f"Cleanup: keeping device type {model}; still referenced by devices")
+                else:
+                    logger.warning(f"Cleanup: failed to delete unused device type {model}: {e}")
     logger.info(f"Cleanup: refreshed {refreshed} device type(s), deleted {deleted} unused device type(s)")
     return deleted
 
