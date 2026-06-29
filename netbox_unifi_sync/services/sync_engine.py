@@ -1674,6 +1674,14 @@ def sync_client_ips(nb, site_obj, nb_site, tenant):
                 if active_clients[stored_mac]["ip"] == ip_plain:
                     continue  # still valid
 
+            # Never delete an IP that is marked management / out-of-band, even
+            # if it happens to carry the client tag.
+            if _ip_is_mgmt_or_oob(nb_ip):
+                logger.debug(
+                    f"Keeping client IP {nb_ip.address}: marked management/out-of-band."
+                )
+                continue
+
             try:
                 nb_ip.delete()
                 logger.info(f"Deleted stale client IP {nb_ip.address} (MAC {stored_mac})")
@@ -3010,6 +3018,52 @@ def _match_device_type_by_specs(nb, specs, manufacturer):
     return None
 
 
+# Tags this plugin applies to the IPs it owns. Only orphans carrying one of
+# these may be auto-deleted by cleanup; everything else is treated as
+# externally/manually managed and preserved.
+_SYNC_OWNED_IP_TAGS = {"unifi-client"}
+
+# Substrings that mark an IP as a deliberately-managed management or
+# out-of-band address that must never be auto-deleted by the sync.
+_PROTECTED_IP_KEYWORDS = ("mgmt", "oob", "out-of-band", "out of band",
+                          "management", "managem")
+
+
+def _ip_is_mgmt_or_oob(ip) -> bool:
+    """True if the IP looks like a deliberately-managed management / out-of-band
+    address that must be preserved.
+
+    Recognised signals (any one is enough):
+      * a NetBox IP role is set (loopback/secondary/vip/... or custom);
+      * the description, DNS name or any tag mentions mgmt / oob / management;
+      * the IP is a device's primary_ip4/primary_ip6 or oob_ip.
+
+    Errs on the side of protection: any uncertainty returns True.
+    """
+    try:
+        if getattr(ip, "role", None):
+            return True
+        blob = " ".join(filter(None, [
+            ip.description or "",
+            ip.dns_name or "",
+            " ".join(t.name for t in ip.tags.all()),
+        ])).lower()
+        if any(k in blob for k in _PROTECTED_IP_KEYWORDS):
+            return True
+        from dcim.models import Device
+        if (Device.objects.filter(primary_ip4_id=ip.id).exists()
+                or Device.objects.filter(primary_ip6_id=ip.id).exists()):
+            return True
+        try:
+            if Device.objects.filter(oob_ip_id=ip.id).exists():
+                return True
+        except Exception:
+            pass  # older NetBox without oob_ip field
+    except Exception:
+        return True  # uncertain -> protect
+    return False
+
+
 def _old_primary_ip_is_disposable(old_ip_obj, device_name) -> bool:
     """Decide whether a device's replaced primary IP can be safely deleted.
 
@@ -3024,6 +3078,8 @@ def _old_primary_ip_is_disposable(old_ip_obj, device_name) -> bool:
     except Exception:
         return False  # can't verify -> don't delete
     try:
+        if _ip_is_mgmt_or_oob(ip):
+            return False
         if ip.tags.exists():
             return False
         desc = (ip.description or "").strip()
@@ -3897,19 +3953,47 @@ def cleanup_orphan_interfaces(nb, nb_site, tenant):
 
 
 def cleanup_orphan_ips(nb, tenant):
-    """Delete IP addresses that have no assigned object (orphaned)."""
+    """Delete orphaned IP addresses that this sync owns.
+
+    Historically this removed EVERY unassigned IP in the tenant, which could
+    silently destroy hand-managed addresses (reserved IPs, management / out-of-
+    band IPs, anything created outside the sync). It now only deletes an orphan
+    when ALL of the following hold:
+      * it carries a sync-owned tag (see ``_SYNC_OWNED_IP_TAGS``);
+      * its status is ``active`` (reserved/deprecated IPs are kept);
+      * it is not a management / out-of-band address (see ``_ip_is_mgmt_or_oob``).
+    Everything else is preserved.
+    """
+    from ipam.models import IPAddress
     all_ips = list(nb.ipam.ip_addresses.filter(tenant_id=tenant.id))
     deleted = 0
-    for ip in all_ips:
-        if ip.assigned_object is None and ip.assigned_object_id is None:
-            try:
-                ip.delete()
-                deleted += 1
-                logger.debug(f"Cleanup: deleted orphan IP {ip.address}")
-            except Exception as e:
-                logger.warning(f"Cleanup: failed to delete orphan IP {ip.address}: {e}")
-    if deleted:
-        logger.info(f"Cleanup: deleted {deleted} orphan IP(s)")
+    preserved = 0
+    for ip_ref in all_ips:
+        if ip_ref.assigned_object is not None or ip_ref.assigned_object_id is not None:
+            continue
+        # Re-fetch via the ORM so tags/role/status are reliably readable.
+        try:
+            ip = IPAddress.objects.get(pk=ip_ref.id)
+        except Exception:
+            continue  # can't verify -> don't delete
+        ip_tags = {t.name for t in ip.tags.all()}
+        if not (ip_tags & _SYNC_OWNED_IP_TAGS):
+            preserved += 1
+            continue  # not sync-owned -> never auto-delete
+        if str(ip.status) != "active" or _ip_is_mgmt_or_oob(ip):
+            preserved += 1
+            continue  # reserved / mgmt / oob / role-tagged -> preserve
+        try:
+            ip.delete()
+            deleted += 1
+            logger.debug(f"Cleanup: deleted orphan IP {ip.address}")
+        except Exception as e:
+            logger.warning(f"Cleanup: failed to delete orphan IP {ip.address}: {e}")
+    if deleted or preserved:
+        logger.info(
+            f"Cleanup: deleted {deleted} sync-owned orphan IP(s), "
+            f"preserved {preserved} non-sync/managed IP(s)"
+        )
     return deleted
 
 
