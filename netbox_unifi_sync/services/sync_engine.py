@@ -2993,6 +2993,32 @@ def _is_duplicate_error(message: str | None) -> bool:
     return any(marker in msg for marker in _DUPLICATE_ERROR_MARKERS)
 
 
+def _is_asset_tag_conflict(message: str | None) -> bool:
+    """True when a save failed specifically because a device's asset_tag
+    collides with another device's — i.e. two UniFi devices whose names encode
+    the same AID/ID. Distinct from a plain name collision so callers can drop
+    just the asset tag instead of mangling the name."""
+    msg = (message or "").lower()
+    return _is_duplicate_error(msg) and "asset_tag" in msg
+
+
+def _describe_asset_tag_holder(nb, asset_tag, exclude_id=None) -> str:
+    """Best-effort human description of the device already holding ``asset_tag``,
+    so duplicate-asset-tag warnings point the operator at the actual clash.
+    Diagnostics only — never raises."""
+    try:
+        from dcim.models import Device as _Device
+        qs = _Device.objects.filter(asset_tag=asset_tag)
+        if exclude_id:
+            qs = qs.exclude(pk=exclude_id)
+        holder = qs.first()
+        if holder is not None:
+            return f"device {holder.name!r} (serial {holder.serial or '?'}, id {holder.pk})"
+    except Exception:  # pragma: no cover - diagnostics only, must not break sync
+        pass
+    return "another device"
+
+
 def _match_device_type_by_specs(nb, specs, manufacturer):
     """Find an existing device type using community-spec identifiers.
 
@@ -3272,12 +3298,31 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
             # Update asset tag from device name (ID/AID suffix)
             asset_tag = extract_asset_tag(device_name)
             if asset_tag and getattr(nb_device, 'asset_tag', None) != asset_tag:
+                previous_asset_tag = getattr(nb_device, 'asset_tag', None)
                 nb_device.asset_tag = asset_tag
                 try:
                     nb_device.save()
                     logger.info(f"Updated asset tag for {device_name} to {asset_tag}")
-                except (pynetbox.core.query.RequestError, RuntimeError):
-                    logger.warning("Failed to update asset tag for existing device")
+                except (pynetbox.core.query.RequestError, RuntimeError) as e:
+                    # Roll the in-memory value back to what's actually in the DB.
+                    # Otherwise the bad asset_tag stays on this object and every
+                    # later save() in this function (zabbix tag, device status,
+                    # custom fields) re-raises the same unique-constraint error —
+                    # silently dropping all of those updates too.
+                    nb_device.asset_tag = previous_asset_tag
+                    if _is_asset_tag_conflict(str(e)):
+                        holder = _describe_asset_tag_holder(
+                            nb, asset_tag, exclude_id=getattr(nb_device, 'id', None)
+                        )
+                        logger.warning(
+                            f"Asset tag {asset_tag!r} for device {device_name} "
+                            f"(serial {device_serial}) is already used by {holder}; "
+                            f"keeping its previous asset tag {previous_asset_tag!r}. "
+                            f"Two UniFi devices encode the same AID — fix the "
+                            f"duplicate name in UniFi."
+                        )
+                    else:
+                        logger.warning(f"Failed to update asset tag for {device_name}: {e}")
         else:
             # Create NetBox Device
             try:
@@ -3329,7 +3374,29 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                 # phrase it either as "...must be unique per site" or as a raw unique
                 # constraint violation — _is_duplicate_error() recognises both.
                 error_message = str(e)
-                if _is_duplicate_error(error_message):
+                # An asset-tag collision means another physical unit already holds
+                # the asset tag we derived from this device's name (two UniFi
+                # devices encoding the same AID). Suffixing the name won't help —
+                # drop the asset tag and create the device without it so it still
+                # lands in NetBox; the operator fixes the duplicate name in UniFi.
+                if _is_asset_tag_conflict(error_message) and device_data.get('asset_tag'):
+                    clashing = device_data.pop('asset_tag')
+                    holder = _describe_asset_tag_holder(nb, clashing)
+                    logger.warning(
+                        f"Asset tag {clashing!r} for new device {device_name} "
+                        f"(serial {device_serial}) is already used by {holder}; "
+                        f"creating without an asset tag. Fix the duplicate name in UniFi."
+                    )
+                    try:
+                        nb_device = nb.dcim.devices.create(device_data)
+                        if nb_device:
+                            logger.info(f"Device {device_name} serial {device_serial} with ID "
+                                        f"{nb_device.id} successfully added to NetBox (without asset tag).")
+                    except (pynetbox.core.query.RequestError, RuntimeError) as e_at:
+                        error_message = str(e_at)  # fall through to name-collision handling
+                    else:
+                        error_message = None
+                if error_message and _is_duplicate_error(error_message):
                     disambiguated = f"{device_name}_{device_serial}"
                     logger.warning(f"Device name {device_name} already exists at site {site}. "
                                    f"Trying with name {disambiguated}.")
@@ -3341,7 +3408,7 @@ def process_device(unifi, nb, site, device, nb_ubiquity, tenant, unifi_device_ip
                     except (pynetbox.core.query.RequestError, RuntimeError) as e2:
                         logger.exception(f"Failed to create device {device_name} serial {device_serial} at site {site}: {e2}")
                         return
-                else:
+                elif error_message:
                     logger.exception(f"Failed to create device {device_name} serial {device_serial} at site {site}: {e}")
                     return
 
